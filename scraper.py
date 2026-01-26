@@ -25,6 +25,7 @@ from webdriver_manager.chrome import ChromeDriverManager
 from config import (
     X_LOGIN_URL,
     X_PROFILE_URL,
+    X_BOOKMARKS_URL,
     IMPLICIT_WAIT,
     PAGE_LOAD_TIMEOUT,
     SCROLL_PAUSE_MIN,
@@ -257,6 +258,32 @@ class XScraper:
             print(f"Profil navigasyon hatası: {e}")
             return False
 
+    def navigate_to_bookmarks(self) -> bool:
+        """
+        Bookmark sayfasına git
+
+        Returns:
+            Başarılı ise True
+        """
+        try:
+            print(f"Bookmarks sayfasına gidiliyor: {X_BOOKMARKS_URL}")
+            self.driver.get(X_BOOKMARKS_URL)
+
+            # Bookmark sayfası yüklendi mi kontrol et
+            wait = WebDriverWait(self.driver, 15)
+            wait.until(
+                EC.presence_of_element_located((By.XPATH, '//article[@data-testid="tweet"]'))
+            )
+            print("Bookmarks sayfası yüklendi!")
+            return True
+
+        except TimeoutException:
+            print("Bookmarks yüklenemedi veya bookmark bulunamadı.")
+            return False
+        except Exception as e:
+            print(f"Bookmarks navigasyon hatası: {e}")
+            return False
+
     def _parse_tweet_element(self, article) -> Optional[Tweet]:
         """
         Tweet elementinden veri çıkar
@@ -317,55 +344,48 @@ class XScraper:
             except NoSuchElementException:
                 pass
 
-            # Article/Quoted Tweet kontrolü
-            # Tweet içinde başka tweet (quoted tweet) veya article kartı var mı?
+
+            # Article/Embedded Content kontrolü
+            # Tweet içinde kart (article, quoted tweet, vb.) varsa içeriğini al
+            article_url = None
             try:
-                # DEBUG: Tüm linkleri ve elementleri logla
-                all_status_links = article.find_elements(By.XPATH, './/a[contains(@href, "/status/")]')
-
-                # ÖNCELİKLİ: Tweet içinde BAŞKA tweet linki var mı? (quoted tweet)
-                for link in all_status_links:
-                    href = link.get_attribute("href") or ""
-                    # Kendi tweet ID'si değilse = quoted tweet var
-                    if "/status/" in href and tweet_id not in href:
-                        has_article = True
-                        print(f"      [DEBUG] QUOTED TWEET BULUNDU: {href[:50]}")
-                        break
-
-                # Quoted tweet testid'i
+                # 1. Card wrapper kontrolü (article kartları bu şekilde görünüyor)
+                cards = article.find_elements(By.CSS_SELECTOR, '[data-testid="card.wrapper"]')
+                if cards:
+                    # Card içindeki linki bul
+                    for card in cards:
+                        try:
+                            card_links = card.find_elements(By.TAG_NAME, 'a')
+                            for link in card_links:
+                                href = link.get_attribute("href") or ""
+                                if "/status/" in href and tweet_id not in href:
+                                    article_url = href
+                                    has_article = True
+                                    print(f"      [ARTICLE] Kart içinde link: {href[:60]}...")
+                                    break
+                        except:
+                            continue
+                    if has_article:
+                        pass  # Bulundu
+                
+                # 2. Quoted tweet kontrolü (tweet içinde başka tweet embed edilmiş)
                 if not has_article:
-                    quoted = article.find_elements(By.CSS_SELECTOR, '[data-testid*="quote"]')
-                    if quoted:
-                        has_article = True
-                        print(f"      [DEBUG] QUOTE TESTID BULUNDU")
-
-                # Card wrapper (article kartları)
-                if not has_article:
-                    cards = article.find_elements(By.CSS_SELECTOR, '[data-testid="card.wrapper"]')
-                    if cards:
-                        has_article = True
-                        print(f"      [DEBUG] CARD WRAPPER BULUNDU")
-
-                # Card layout
-                if not has_article:
-                    cards = article.find_elements(By.CSS_SELECTOR, '[data-testid*="card.layout"]')
-                    if cards:
-                        has_article = True
-                        print(f"      [DEBUG] CARD LAYOUT BULUNDU")
-
-                # /i/ linkleri (X Notes vs)
-                if not has_article:
-                    article_links = article.find_elements(By.XPATH, './/a[contains(@href, "/i/")]')
-                    if article_links:
-                        has_article = True
-                        print(f"      [DEBUG] /i/ LINK BULUNDU")
-
+                    # Kendi tweet ID'si dışındaki /status/ linklerini bul
+                    all_links = article.find_elements(By.XPATH, './/a[contains(@href, "/status/")]')
+                    for link in all_links:
+                        href = link.get_attribute("href") or ""
+                        if "/status/" in href and tweet_id not in href:
+                            # Bu başka bir tweet'e link - muhtemelen quoted/article
+                            article_url = href
+                            has_article = True
+                            print(f"      [ARTICLE] Embedded tweet: {href[:60]}...")
+                            break
+                            
             except NoSuchElementException:
                 pass
             except Exception as e:
                 print(f"      [DEBUG] Article detection hatası: {str(e)[:30]}")
 
-            # Text zaten yukarıda alındı
 
             # Promo/tanıtım tweetlerini atla
             if text:
@@ -500,18 +520,20 @@ class XScraper:
 
         return text
 
+
+
     def _get_article_content(self, tweet_url: str) -> str:
         """
-        Article/Quoted Tweet içeriğini al
-        Tweet'e git, içindeki quoted tweet veya article'a tıkla, scroll yap, içeriği al
+        Article/Embedded tweet içeriğini al
+        Tweet içindeki karta tıklayıp içeriği al
 
         Args:
-            tweet_url: Tweet'in URL'si
+            tweet_url: Ana tweet'in URL'si
 
         Returns:
-            Article/Quoted tweet içeriği
+            Article/embedded içerik
         """
-        text = ""
+        content = ""
         main_window = self.driver.current_window_handle
 
         # Tweet URL'sinden kendi ID'sini çıkar
@@ -523,94 +545,57 @@ class XScraper:
             # 1. Tweet sayfasını yeni tab'da aç
             self.driver.execute_script(f"window.open('{tweet_url}', '_blank');")
             self.driver.switch_to.window(self.driver.window_handles[-1])
-            time.sleep(3)
+            time.sleep(2)
+            
             original_url = self.driver.current_url
+            target_url = None
 
-            clicked = False
+            # 2. Card veya embedded tweet linkini bul ve tıkla
+            try:
+                # Önce card wrapper içindeki linke bak
+                cards = self.driver.find_elements(By.CSS_SELECTOR, '[data-testid="card.wrapper"]')
+                for card in cards:
+                    try:
+                        card_links = card.find_elements(By.TAG_NAME, 'a')
+                        for link in card_links:
+                            href = link.get_attribute("href") or ""
+                            if "/status/" in href and own_tweet_id not in href:
+                                target_url = href
+                                print(f"    → Card linki bulundu: {href[:60]}...")
+                                self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", link)
+                                time.sleep(0.5)
+                                link.click()
+                                time.sleep(3)
+                                break
+                        if target_url:
+                            break
+                    except:
+                        continue
 
-            # ÖNCELİKLİ: Quoted tweet'e tıkla (başka tweet linki)
-            # Kendi tweet ID'si OLMAYAN /status/ linklerini bul ve tıkla
-            if not clicked:
-                try:
-                    all_status_links = self.driver.find_elements(By.XPATH, '//a[contains(@href, "/status/")]')
-                    for link in all_status_links:
+                # Card'da bulamadıysak quoted tweet linkini dene
+                if not target_url:
+                    all_links = self.driver.find_elements(By.XPATH, '//a[contains(@href, "/status/")]')
+                    for link in all_links:
                         href = link.get_attribute("href") or ""
-                        # Kendi tweet'i değilse tıkla
-                        if "/status/" in href and own_tweet_id and own_tweet_id not in href:
-                            print(f"    → Quoted tweet bulundu: {href[:60]}...")
+                        if "/status/" in href and own_tweet_id not in href:
+                            target_url = href
+                            print(f"    → Quoted tweet linki: {href[:60]}...")
                             self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", link)
                             time.sleep(0.5)
                             link.click()
                             time.sleep(3)
-                            if self.driver.current_url != original_url:
-                                clicked = True
-                                print(f"    → Quoted tweet açıldı: {self.driver.current_url[:60]}...")
-                                break
-                except Exception as e:
-                    print(f"    [!] Quoted tweet tıklama hatası: {str(e)[:30]}")
+                            break
 
-            # Quoted tweet testid ile dene
-            if not clicked:
-                try:
-                    quoted_elements = self.driver.find_elements(By.CSS_SELECTOR, '[data-testid*="quote"]')
-                    for qe in quoted_elements:
-                        try:
-                            self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", qe)
-                            time.sleep(0.3)
-                            qe.click()
-                            time.sleep(2)
-                            if self.driver.current_url != original_url:
-                                clicked = True
-                                print(f"    → Quote element açıldı: {self.driver.current_url[:60]}...")
-                                break
-                        except:
-                            continue
-                except:
-                    pass
+            except Exception as e:
+                print(f"    [!] Link tıklama hatası: {str(e)[:30]}")
 
-            # Card wrapper'a tıkla
-            if not clicked:
-                try:
-                    cards = self.driver.find_elements(By.CSS_SELECTOR, '[data-testid="card.wrapper"]')
-                    for card in cards:
-                        try:
-                            self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", card)
-                            time.sleep(0.3)
-                            card.click()
-                            time.sleep(2)
-                            if self.driver.current_url != original_url:
-                                clicked = True
-                                print(f"    → Card açıldı: {self.driver.current_url[:60]}...")
-                                break
-                        except:
-                            continue
-                except:
-                    pass
-
-            # /i/ linklere tıkla (X Notes vs)
-            if not clicked:
-                try:
-                    i_links = self.driver.find_elements(By.XPATH, '//a[contains(@href, "/i/")]')
-                    for link in i_links:
-                        href = link.get_attribute("href") or ""
-                        if "/i/" in href:
-                            self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", link)
-                            time.sleep(0.3)
-                            link.click()
-                            time.sleep(2)
-                            if self.driver.current_url != original_url:
-                                clicked = True
-                                print(f"    → /i/ link açıldı: {self.driver.current_url[:60]}...")
-                                break
-                except:
-                    pass
-
-            # 2. Article/Quoted tweet sayfasında scroll yaparak içerik al
-            time.sleep(1)
-            text = self._scroll_and_collect_article_text()
-
-            if text:
-                print(f"    ✓ {len(text)} karakter içerik alındı")
+            # 3. Yeni sayfadaki içeriği al
+            if self.driver.current_url != original_url or target_url:
+                time.sleep(2)
+                content = self._extract_full_tweet_content()
+                
+            if content:
+                print(f"    ✓ {len(content)} karakter içerik alındı")
             else:
                 print(f"    [!] İçerik alınamadı")
 
@@ -625,82 +610,93 @@ class XScraper:
             except:
                 pass
 
-        return text
+        return content
 
-    def _scroll_and_collect_article_text(self) -> str:
+    def _extract_full_tweet_content(self) -> str:
         """
-        Tweet sayfasından SADECE ANA TWEET'in içeriğini al
-        Replies/yorumları ALMA
+        Tweet sayfasından tam içeriği al (article veya uzun tweet)
+        Scroll yaparak tüm içeriği yükle
 
         Returns:
-            Ana tweet metni
+            Tweet/article içeriği
         """
         try:
             # Sayfanın başına git
             self.driver.execute_script("window.scrollTo(0, 0);")
             time.sleep(1.5)
 
-            collected_text = ""
+            collected_texts = []
 
-            # SADECE İLK (ANA) TWEET'İ AL - replies değil
-            # X'te ana tweet sayfadaki ilk article elementi
+            # Ana tweet'in metnini al (ilk article elementi)
             try:
-                # İlk article elementini bul (ana tweet)
-                first_article = self.driver.find_element(By.XPATH, '(//article[@data-testid="tweet"])[1]')
-
-                # Bu article içindeki tweetText'i al
-                tweet_text_elem = first_article.find_element(By.XPATH, './/*[@data-testid="tweetText"]')
-                collected_text = tweet_text_elem.text.strip()
+                # İlk (ana) tweet
+                main_article = self.driver.find_element(By.XPATH, '(//article[@data-testid="tweet"])[1]')
+                
+                # Tweet text'ini al
+                text_elements = main_article.find_elements(By.XPATH, './/*[@data-testid="tweetText"]')
+                for elem in text_elements:
+                    text = elem.text.strip()
+                    if text and text not in collected_texts:
+                        collected_texts.append(text)
 
             except NoSuchElementException:
-                # Alternatif: İlk tweetText'i al
-                try:
-                    first_tweet_text = self.driver.find_element(By.XPATH, '(//*[@data-testid="tweetText"])[1]')
-                    collected_text = first_tweet_text.text.strip()
-                except:
-                    pass
+                pass
 
-            # Eğer metin kısa ise, belki thread var - birkaç tweet daha kontrol et
-            # Ama sadece ANA KULLANICININ tweetlerini al (aynı username)
-            if collected_text and len(collected_text) < 500:
+            # Eğer metin kısaysa, sayfa scroll yaparak daha fazla içerik olup olmadığına bak
+            # (Article'lar çok uzun olabilir)
+            total_text = "\n\n".join(collected_texts)
+            
+            if len(total_text) < 500:
+                # Belki thread var, birkaç tweet daha kontrol et
                 try:
                     # Sayfadaki URL'den username'i al
                     current_url = self.driver.current_url
-                    if "/status/" in current_url:
-                        username = current_url.split("x.com/")[1].split("/")[0] if "x.com/" in current_url else ""
+                    username = ""
+                    if "x.com/" in current_url:
+                        username = current_url.split("x.com/")[1].split("/")[0]
 
-                        if username:
-                            # Aynı kullanıcının diğer tweetlerini de al (thread)
-                            all_articles = self.driver.find_elements(By.XPATH, '//article[@data-testid="tweet"]')
-                            thread_texts = [collected_text]
+                    if username:
+                        # Scroll yap ve aynı kullanıcının diğer tweetlerini al (thread)
+                        for _ in range(5):  # Max 5 scroll
+                            self.driver.execute_script("window.scrollBy(0, 500);")
+                            time.sleep(0.5)
 
-                            for i, art in enumerate(all_articles[1:5]):  # Max 4 tweet daha (thread için)
-                                try:
-                                    # Bu tweet aynı kullanıcıya mı ait?
-                                    user_link = art.find_element(By.XPATH, './/a[contains(@href, "/" + username + "/")]')
-                                    if user_link:
-                                        text_elem = art.find_element(By.XPATH, './/*[@data-testid="tweetText"]')
-                                        t = text_elem.text.strip()
-                                        if t and t not in thread_texts:
-                                            thread_texts.append(t)
-                                except:
-                                    break  # Farklı kullanıcı = thread bitti
-
-                            if len(thread_texts) > 1:
-                                collected_text = "\n\n".join(thread_texts)
+                        all_articles = self.driver.find_elements(By.XPATH, '//article[@data-testid="tweet"]')
+                        for art in all_articles[:10]:  # Max 10 tweet
+                            try:
+                                # Bu tweet aynı kullanıcıya mı ait?
+                                art_links = art.find_elements(By.XPATH, f'.//a[contains(@href, "/{username}/")]')
+                                if art_links:
+                                    text_elem = art.find_element(By.XPATH, './/*[@data-testid="tweetText"]')
+                                    t = text_elem.text.strip()
+                                    if t and t not in collected_texts:
+                                        collected_texts.append(t)
+                            except:
+                                continue
                 except:
                     pass
 
-            return collected_text
+            return "\n\n".join(collected_texts)
 
         except Exception as e:
-            print(f"    [!] Tweet içeriği alma hatası: {str(e)[:30]}")
+            print(f"    [!] İçerik çıkarma hatası: {str(e)[:30]}")
             return ""
 
     def _scroll_down(self):
-        """Sayfayı aşağı kaydır"""
-        self.driver.execute_script("window.scrollBy(0, 2000);")  # Daha hızlı scroll
+        """Sayfayı aşağı kaydır ve yeni içerik yüklenmesini bekle"""
+        # Scroll öncesi tweet sayısı
+        old_count = len(self.driver.find_elements(By.XPATH, XPATHS["tweet_article"]))
+
+        # Scroll yap
+        self.driver.execute_script("window.scrollBy(0, 1000);")
         time.sleep(random.uniform(SCROLL_PAUSE_MIN, SCROLL_PAUSE_MAX))
+
+        # Yeni tweet yüklenmesini bekle (max 5 saniye)
+        for _ in range(10):
+            new_count = len(self.driver.find_elements(By.XPATH, XPATHS["tweet_article"]))
+            if new_count > old_count:
+                break
+            time.sleep(0.5)
 
     def _scroll_to_bottom(self):
         """Sayfanın en altına git"""
@@ -721,7 +717,8 @@ class XScraper:
         print("(İptal etmek için Ctrl+C - toplananlar kaydedilecek)\n")
         self.tweets_collected = []  # Instance variable olarak sakla
         no_new_tweets_count = 0
-        max_no_new_tweets = 10  # Ardışık 10 scroll'da yeni tweet yoksa dur
+        max_no_new_tweets = 20  # Ardışık 20 scroll'da yeni tweet yoksa dur
+        last_height = 0
 
         try:
             while len(self.tweets_collected) < count:
@@ -745,6 +742,16 @@ class XScraper:
                     no_new_tweets_count = 0
                 else:
                     no_new_tweets_count += 1
+
+                # Sayfa sonuna ulaşıp ulaşmadığını kontrol et
+                new_height = self.driver.execute_script("return document.body.scrollHeight")
+                if new_height == last_height and no_new_tweets_count >= 5:
+                    # Sayfa yüklenmiyor, biraz daha bekle
+                    time.sleep(2)
+                    new_height = self.driver.execute_script("return document.body.scrollHeight")
+                    if new_height == last_height:
+                        no_new_tweets_count += 5  # Hızla durma sayacını artır
+                last_height = new_height
 
                 if no_new_tweets_count >= max_no_new_tweets:
                     print("Daha fazla tweet bulunamadı.")
@@ -893,3 +900,71 @@ class XScraper:
         end_date = datetime.now()
         start_date = end_date - timedelta(days=days)
         return self.scrape_by_date(start_date, end_date)
+
+    def scrape_bookmarks(self, count: int = None, get_all: bool = False) -> List[Tweet]:
+        """
+        Bookmark'lardan tweet topla
+
+        Args:
+            count: Toplanacak bookmark sayısı (None ise get_all kullanılır)
+            get_all: True ise tüm bookmark'ları topla
+
+        Returns:
+            Tweet listesi
+        """
+        if get_all:
+            print("Tüm bookmark'lar toplanıyor...")
+        else:
+            print(f"{count} bookmark toplanıyor...")
+        print("(İptal etmek için Ctrl+C - toplananlar kaydedilecek)\n")
+
+        self.tweets_collected = []
+        no_new_tweets_count = 0
+        max_no_new_tweets = 10  # Ardışık 10 scroll'da yeni tweet yoksa dur
+
+        try:
+            while True:
+                # Count kontrolü
+                if not get_all and count and len(self.tweets_collected) >= count:
+                    break
+
+                # Mevcut tweetleri topla
+                articles = self.driver.find_elements(By.XPATH, XPATHS["tweet_article"])
+                new_tweets_found = False
+
+                for article in articles:
+                    if not get_all and count and len(self.tweets_collected) >= count:
+                        break
+
+                    tweet = self._parse_tweet_element(article)
+                    if tweet:
+                        self.tweets_collected.append(tweet)
+                        new_tweets_found = True
+                        article_tag = " [ARTICLE]" if tweet.has_article else ""
+                        show_more_tag = " [SHOW MORE]" if tweet.needs_full_text else ""
+                        if count:
+                            print(f"  [{len(self.tweets_collected)}/{count}] Bookmark toplandı: {tweet.date_str}{article_tag}{show_more_tag}")
+                        else:
+                            print(f"  [{len(self.tweets_collected)}] Bookmark toplandı: {tweet.date_str}{article_tag}{show_more_tag}")
+
+                if new_tweets_found:
+                    no_new_tweets_count = 0
+                else:
+                    no_new_tweets_count += 1
+
+                if no_new_tweets_count >= max_no_new_tweets:
+                    print("Daha fazla bookmark bulunamadı.")
+                    break
+
+                # Aşağı kaydır
+                self._scroll_down()
+
+        except KeyboardInterrupt:
+            print(f"\n\nDurduruldu! {len(self.tweets_collected)} bookmark toplandı.")
+            raise  # Ana programa ilet
+
+        # Scroll bitti, şimdi show more olan tweetlerin tam metnini al
+        self._process_show_more_tweets()
+
+        print(f"Toplam {len(self.tweets_collected)} bookmark toplandı.")
+        return self.tweets_collected

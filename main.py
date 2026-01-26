@@ -41,16 +41,29 @@ def get_user_input():
         print("Manuel giriş seçildi - Browser'da kendiniz giriş yapacaksınız.")
     print()
 
-    # Hedef profil
-    print("[2] Scrape Edilecek Hesap")
+    # Scrape türü seçimi
+    print("[2] Scrape Türü")
     print("-" * 40)
-    target_username = input("Hedef hesap kullanıcı adı (@olmadan): ").strip()
-    if target_username.startswith("@"):
-        target_username = target_username[1:]
+    print("1. Profil tweetleri (bir kullanıcının postları)")
+    print("2. Bookmarks (kendi kayıtlı tweetleriniz)")
+    scrape_type_choice = input("Seçiminiz (1/2): ").strip()
     print()
 
+    if scrape_type_choice == "2":
+        scrape_type = "bookmarks"
+        target_username = "bookmarks"
+    else:
+        scrape_type = "profile"
+        # Hedef profil
+        print("[3] Scrape Edilecek Hesap")
+        print("-" * 40)
+        target_username = input("Hedef hesap kullanıcı adı (@olmadan): ").strip()
+        if target_username.startswith("@"):
+            target_username = target_username[1:]
+        print()
+
     # Scraping modu
-    print("[3] Scraping Modu")
+    print("[4] Scraping Modu")
     print("-" * 40)
     print("1. Belirli sayıda tweet")
     print("2. Son X gün içindeki tweetler")
@@ -86,7 +99,7 @@ def get_user_input():
     print()
 
     # Çıktı formatı
-    print("[4] Çıktı Formatı")
+    print("[5] Çıktı Formatı")
     print("-" * 40)
     print("1. JSON (MCP-ready, önerilen)")
     print("2. Markdown (.md)")
@@ -118,6 +131,7 @@ def get_user_input():
         "output_file": output_file,
         "output_format": output_format,
         "manual_login": manual_login,
+        "scrape_type": scrape_type,
     }
 
 
@@ -125,13 +139,26 @@ def get_scrape_config():
     """Sadece scrape edilecek hesap ve mod bilgilerini al (login hariç)"""
     print()
 
-    # Hedef profil
-    print("[2] Scrape Edilecek Hesap")
+    # Scrape türü seçimi
+    print("[1] Scrape Türü")
     print("-" * 40)
-    target_username = input("Hedef hesap kullanıcı adı (@olmadan): ").strip()
-    if target_username.startswith("@"):
-        target_username = target_username[1:]
+    print("1. Profil tweetleri (bir kullanıcının postları)")
+    print("2. Bookmarks (kendi kayıtlı tweetleriniz)")
+    scrape_type_choice = input("Seçiminiz (1/2): ").strip()
     print()
+
+    if scrape_type_choice == "2":
+        scrape_type = "bookmarks"
+        target_username = "bookmarks"
+    else:
+        scrape_type = "profile"
+        # Hedef profil
+        print("[2] Scrape Edilecek Hesap")
+        print("-" * 40)
+        target_username = input("Hedef hesap kullanıcı adı (@olmadan): ").strip()
+        if target_username.startswith("@"):
+            target_username = target_username[1:]
+        print()
 
     # Scraping modu
     print("[3] Scraping Modu")
@@ -199,6 +226,7 @@ def get_scrape_config():
         "mode_config": mode_config,
         "output_file": output_file,
         "output_format": output_format,
+        "scrape_type": scrape_type,
     }
 
 
@@ -248,30 +276,54 @@ def main():
 
         # Ana scraping döngüsü
         while True:
-            # Profile git
-            if not scraper.navigate_to_profile(config["target_username"]):
-                print("Profile gidilemedi!")
-                if ask_continue():
-                    config.update(get_scrape_config())
-                    continue
-                else:
-                    break
-
-            # Tweet topla
+            # Scrape türüne göre navigasyon ve tweet toplama
+            scrape_type = config.get("scrape_type", "profile")
             mode = config["mode_config"]
             tweets = []
 
             # Önceki toplamları temizle
             scraper.collected_tweet_ids = set()
 
-            if mode["mode"] == "count":
-                tweets = scraper.scrape_by_count(mode["count"])
+            if scrape_type == "bookmarks":
+                # Bookmarks sayfasına git
+                if not scraper.navigate_to_bookmarks():
+                    print("Bookmarks sayfasına gidilemedi!")
+                    if ask_continue():
+                        config.update(get_scrape_config())
+                        continue
+                    else:
+                        break
 
-            elif mode["mode"] == "days":
-                tweets = scraper.scrape_last_n_days(mode["days"])
+                # Bookmark'ları topla
+                if mode["mode"] == "count":
+                    tweets = scraper.scrape_bookmarks(count=mode["count"])
+                else:
+                    # days ve date_range için tüm bookmark'ları çek, sonra filtrele
+                    tweets = scraper.scrape_bookmarks(get_all=True)
+                    if mode["mode"] == "days":
+                        cutoff = datetime.now() - timedelta(days=mode["days"])
+                        tweets = [t for t in tweets if t.date and t.date >= cutoff]
+                    elif mode["mode"] == "date_range":
+                        tweets = [t for t in tweets if t.date and mode["start"] <= t.date <= mode["end"]]
+            else:
+                # Profile git
+                if not scraper.navigate_to_profile(config["target_username"]):
+                    print("Profile gidilemedi!")
+                    if ask_continue():
+                        config.update(get_scrape_config())
+                        continue
+                    else:
+                        break
 
-            elif mode["mode"] == "date_range":
-                tweets = scraper.scrape_by_date(mode["start"], mode["end"])
+                # Tweet topla
+                if mode["mode"] == "count":
+                    tweets = scraper.scrape_by_count(mode["count"])
+
+                elif mode["mode"] == "days":
+                    tweets = scraper.scrape_last_n_days(mode["days"])
+
+                elif mode["mode"] == "date_range":
+                    tweets = scraper.scrape_by_date(mode["start"], mode["end"])
 
             if not tweets:
                 print("Hiç tweet toplanamadı!")

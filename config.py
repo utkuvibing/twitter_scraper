@@ -6,37 +6,34 @@ X (Twitter) Scraper Configuration
 X_BASE_URL = "https://x.com"
 X_LOGIN_URL = "https://x.com/i/flow/login"
 X_PROFILE_URL = "https://x.com/{username}"
+X_BOOKMARKS_URL = "https://x.com/i/bookmarks"
 
 # Selenium Settings
-IMPLICIT_WAIT = 1  # Düşürüldü - explicit wait kullanılıyor
+IMPLICIT_WAIT = 1
 PAGE_LOAD_TIMEOUT = 30
-SCROLL_PAUSE_MIN = 0.1   # Minimum saniye
-SCROLL_PAUSE_MAX = 0.25  # Maximum saniye
+SCROLL_PAUSE_MIN = 1.5
+SCROLL_PAUSE_MAX = 2.5
 
-# CSS Selectors (X'in mevcut DOM yapısı - 2024/2025)
+# CSS Selectors
 SELECTORS = {
-    # Login page
     "username_input": 'input[autocomplete="username"]',
     "password_input": 'input[name="password"]',
     "next_button": '[role="button"]:has-text("Next"), button[type="button"]',
     "login_button": '[data-testid="LoginForm_Login_Button"]',
-
-    # Tweet elements
     "tweet_article": 'article[data-testid="tweet"]',
     "tweet_text": '[data-testid="tweetText"]',
     "tweet_time": 'time',
     "tweet_link": 'a[href*="/status/"]',
-
-    # Media
     "tweet_image": '[data-testid="tweetPhoto"] img',
     "tweet_video": '[data-testid="videoPlayer"]',
-
-    # Reply indicator (bunu içeren tweetler reply'dır)
     "reply_indicator": '[data-testid="socialContext"]',
     "replying_to_text": 'div[dir="ltr"]:has-text("Replying to")',
+    "article_link": 'a[href*="/i/articles/"]',
+    "article_card": '[data-testid="card.wrapper"]',
+    "article_title": 'h1, [role="heading"][aria-level="1"]',
+    "article_content": 'article p, [data-testid="tweetText"]',
 }
 
-# XPath Selectors (bazı elementler için daha güvenilir)
 XPATHS = {
     "username_input": '//input[@autocomplete="username"]',
     "next_button": '//button[contains(@class, "css-175oi2r")]//span[text()="Next"]/ancestor::button',
@@ -44,9 +41,9 @@ XPATHS = {
     "login_button": '//button[@data-testid="LoginForm_Login_Button"]',
     "tweet_article": '//article[@data-testid="tweet"]',
     "replying_to": './/span[contains(text(), "Replying to")]',
+    "article_link": './/a[contains(@href, "/i/articles/")]',
 }
 
-# Chrome Options
 CHROME_OPTIONS = [
     "--disable-blink-features=AutomationControlled",
     "--disable-infobars",
@@ -58,5 +55,4 @@ CHROME_OPTIONS = [
     "--start-maximized",
 ]
 
-# User Agent
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
