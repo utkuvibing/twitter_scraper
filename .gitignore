@@ -39,3 +39,7 @@ Thumbs.db
 
 # Temp files
 tmpclaude-*
+nul
+
+# Generated scripts
+generate_portfolio_doc.py

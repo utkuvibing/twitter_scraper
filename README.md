@@ -1,53 +1,92 @@
-# Twitter/X Scraper
+# X (Twitter) Scraper
 
-A Python GUI application to scrape tweets from X (Twitter) profiles.
+A Python-based automation tool that scrapes tweets from X (Twitter) profiles and bookmarks using Selenium WebDriver. Built as an AI-assisted project leveraging vibe coding methodology.
 
 ## Features
 
-- Scrape tweets from any public X profile
-- Filter original tweets (exclude replies and retweets)
-- Export to Word document (.docx)
-- User-friendly GUI interface
+- **Profile Scraping** - Collect tweets from any public X profile (original posts only, replies filtered out)
+- **Bookmark Scraping** - Export your saved bookmarks with full content
+- **Multiple Scraping Modes** - By count, date range, or last N days
+- **Full Content Extraction** - Automatically expands "Show more" truncated tweets and X Articles
+- **Multi-Format Export** - Save as JSON (analysis-ready), Markdown, or Word (.docx)
+- **Smart Filtering** - Skips promotional tweets, deduplicates content automatically
+- **Anti-Detection** - Human-like typing, randomized delays, stealth browser configuration
+- **Graceful Interruption** - Ctrl+C saves all collected data with `_PARTIAL` suffix
+- **Session Reuse** - Scrape multiple profiles in one session without re-logging in
+- **Dual Login Support** - Manual login (Google/Apple OAuth) or automatic credentials
 
-## Requirements
+## Quick Start
+
+### Prerequisites
 
 - Python 3.8+
-- Chrome browser installed
-- ChromeDriver (automatically managed)
+- Google Chrome installed
 
-## Installation
+### Installation
 
-1. Clone this repository:
 ```bash
-git clone https://github.com/YOUR_USERNAME/twitter_scraper.git
+git clone https://github.com/utkuvibing/twitter_scraper.git
 cd twitter_scraper
-```
-
-2. Install dependencies:
-```bash
 pip install -r requirements.txt
 ```
 
-## Usage
+### Usage
 
-Run the application:
 ```bash
 python main.py
 ```
 
-1. Enter your X (Twitter) credentials
-2. Enter the target username to scrape
-3. Set the number of tweets to fetch
-4. Click "Start" to begin scraping
-5. Export results to Word document
+The interactive CLI will guide you through:
+1. Choose login method (manual recommended for OAuth)
+2. Select source (profile or bookmarks)
+3. Set scraping mode (count / date range / last N days)
+4. Pick output format (JSON / Markdown / Word)
 
-## Files
+## Output Example
 
-- `main.py` - GUI application (Tkinter)
-- `scraper.py` - Tweet scraping logic (Selenium)
-- `document_generator.py` - Word document export
-- `config.py` - Configuration and selectors
+**JSON output** (ideal for data analysis and LLM pipelines):
+```json
+{
+  "source": "twitter",
+  "user": "@username",
+  "total_tweets": 150,
+  "tweets": [
+    {
+      "id": "1234567890",
+      "text": "Tweet content here...",
+      "date": "2025-02-08T14:30:00+00:00",
+      "url": "https://x.com/username/status/1234567890",
+      "has_media": true,
+      "media_urls": ["..."],
+      "has_article": false
+    }
+  ]
+}
+```
+
+## Tech Stack
+
+| Technology | Purpose |
+|---|---|
+| Python 3.8+ | Core language |
+| Selenium WebDriver | Browser automation & DOM interaction |
+| webdriver-manager | Automatic ChromeDriver management |
+| python-docx | Word document generation |
+
+## How It Works
+
+The scraper controls a real Chrome browser to navigate X's web interface, scroll through content, and extract tweet data from the DOM. This approach handles X's dynamic JavaScript rendering without requiring API access.
+
+Key technical decisions:
+- **Browser automation over API** - No rate limits, no API costs, access to bookmarks
+- **Scroll-parse loop** - Continuously scrolls and parses new DOM elements as they load
+- **Deferred full-text fetch** - Collects tweet stubs first, then opens truncated tweets in new tabs for full content
+- **CDP stealth** - Uses Chrome DevTools Protocol to mask automation fingerprints
 
 ## Disclaimer
 
-This tool is for educational purposes only. Please respect X's Terms of Service and rate limits. Use responsibly.
+This tool is for **educational and personal archiving purposes only**. Please respect X's Terms of Service. Use responsibly.
+
+## License
+
+MIT

@@ -11,8 +11,8 @@ X_BOOKMARKS_URL = "https://x.com/i/bookmarks"
 # Selenium Settings
 IMPLICIT_WAIT = 1
 PAGE_LOAD_TIMEOUT = 30
-SCROLL_PAUSE_MIN = 1.5
-SCROLL_PAUSE_MAX = 2.5
+SCROLL_PAUSE_MIN = 2.0
+SCROLL_PAUSE_MAX = 4.0
 
 # CSS Selectors
 SELECTORS = {

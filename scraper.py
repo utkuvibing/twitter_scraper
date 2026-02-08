@@ -36,6 +36,9 @@ from config import (
 )
 
 
+SKIP_ALREADY_COLLECTED = "SKIP_ALREADY_COLLECTED"
+
+
 @dataclass
 class Tweet:
     """Tweet veri yapısı"""
@@ -46,7 +49,7 @@ class Tweet:
     media_urls: List[str]
     tweet_url: str
     needs_full_text: bool = False  # Show more varsa True
-    has_article: bool = False  # Article varsa True
+    has_article: bool = False  # X Article varsa True
 
 
 class XScraper:
@@ -295,9 +298,15 @@ class XScraper:
             Tweet objesi veya None (reply ise)
         """
         try:
-            # NOT: Reply filtreleme KALDIRILDI
-            # Posts sekmesinde zaten sadece kullanıcının içerikleri var
-            # Thread'ler de dahil edilecek
+            # Pinned / Reply kontrolü
+            try:
+                social_context = article.find_element(By.CSS_SELECTOR, '[data-testid="socialContext"]')
+                context_text = social_context.text.lower()
+                if "replying" in context_text:
+                    return None  # Reply, atla
+                # "Pinned" / "Sabitlenmiş" ise normal tweet olarak devam et
+            except NoSuchElementException:
+                pass  # socialContext yok, normal tweet
 
             # Tweet ID'sini al (URL'den)
             tweet_id = None
@@ -321,22 +330,11 @@ class XScraper:
             if not tweet_id:
                 return None
 
-            # Zaten toplandıysa atla
+            # Zaten toplandıysa atla (ama "yeni tweet yok" sayma)
             if tweet_id in self.collected_tweet_ids:
-                return None
+                return SKIP_ALREADY_COLLECTED
 
-            # "Show more" kontrolü
-            has_show_more = False
-            has_article = False
-
-            # Show more butonu
-            try:
-                article.find_element(By.CSS_SELECTOR, '[data-testid="tweet-text-show-more-link"]')
-                has_show_more = True
-            except NoSuchElementException:
-                pass
-
-            # Tweet metnini al (article kontrolü için önce text lazım)
+            # Tweet metnini al
             text = ""
             try:
                 text_element = article.find_element(By.XPATH, './/*[@data-testid="tweetText"]')
@@ -344,48 +342,51 @@ class XScraper:
             except NoSuchElementException:
                 pass
 
-
-            # Article/Embedded Content kontrolü
-            # Tweet içinde kart (article, quoted tweet, vb.) varsa içeriğini al
-            article_url = None
+            # "Show more" kontrolü - birden fazla yöntem dene
+            has_show_more = False
             try:
-                # 1. Card wrapper kontrolü (article kartları bu şekilde görünüyor)
-                cards = article.find_elements(By.CSS_SELECTOR, '[data-testid="card.wrapper"]')
-                if cards:
-                    # Card içindeki linki bul
-                    for card in cards:
-                        try:
-                            card_links = card.find_elements(By.TAG_NAME, 'a')
-                            for link in card_links:
-                                href = link.get_attribute("href") or ""
-                                if "/status/" in href and tweet_id not in href:
-                                    article_url = href
-                                    has_article = True
-                                    print(f"      [ARTICLE] Kart içinde link: {href[:60]}...")
-                                    break
-                        except:
-                            continue
-                    if has_article:
-                        pass  # Bulundu
-                
-                # 2. Quoted tweet kontrolü (tweet içinde başka tweet embed edilmiş)
-                if not has_article:
-                    # Kendi tweet ID'si dışındaki /status/ linklerini bul
-                    all_links = article.find_elements(By.XPATH, './/a[contains(@href, "/status/")]')
-                    for link in all_links:
-                        href = link.get_attribute("href") or ""
-                        if "/status/" in href and tweet_id not in href:
-                            # Bu başka bir tweet'e link - muhtemelen quoted/article
-                            article_url = href
-                            has_article = True
-                            print(f"      [ARTICLE] Embedded tweet: {href[:60]}...")
-                            break
-                            
+                article.find_element(By.CSS_SELECTOR, '[data-testid="tweet-text-show-more-link"]')
+                has_show_more = True
             except NoSuchElementException:
                 pass
-            except Exception as e:
-                print(f"      [DEBUG] Article detection hatası: {str(e)[:30]}")
 
+            if not has_show_more:
+                try:
+                    # "Show more" / "Daha fazla göster" text'i olan link
+                    show_more_links = article.find_elements(By.XPATH,
+                        './/a[contains(text(), "Show more") or contains(text(), "Daha fazla")]')
+                    if show_more_links:
+                        has_show_more = True
+                except:
+                    pass
+
+            if not has_show_more and text:
+                # Metin "…" ile bitiyorsa ve 270+ karakter ise muhtemelen truncate
+                if len(text) >= 270 and text.rstrip().endswith("…"):
+                    has_show_more = True
+
+            # Article kontrolü
+            has_article = False
+            try:
+                # Yöntem 1: "Article" text'i ara (𝕏 Article etiketi)
+                article_labels = article.find_elements(By.XPATH,
+                    './/*[contains(text(), "Article") or contains(text(), "article")]')
+                if article_labels:
+                    has_article = True
+
+                # Yöntem 2: Card içinde uzun başlık varsa article olabilir
+                if not has_article:
+                    cards = article.find_elements(By.CSS_SELECTOR, '[data-testid="card.wrapper"]')
+                    for card in cards:
+                        headings = card.find_elements(By.XPATH, './/span[string-length(text()) > 30]')
+                        if headings:
+                            has_article = True
+                            break
+            except:
+                pass
+
+            if has_article:
+                print(f"      [ARTICLE] Article tespit edildi")
 
             # Promo/tanıtım tweetlerini atla
             if text:
@@ -454,8 +455,8 @@ class XScraper:
                 date_str=date_str,
                 media_urls=media_urls,
                 tweet_url=tweet_url,
-                needs_full_text=has_show_more,  # Show more varsa True
-                has_article=has_article,  # Article varsa True
+                needs_full_text=has_show_more,
+                has_article=has_article,
             )
 
         except StaleElementReferenceException:
@@ -520,167 +521,81 @@ class XScraper:
 
         return text
 
-
-
     def _get_article_content(self, tweet_url: str) -> str:
         """
-        Article/Embedded tweet içeriğini al
-        Tweet içindeki karta tıklayıp içeriği al
-
-        Args:
-            tweet_url: Ana tweet'in URL'si
-
-        Returns:
-            Article/embedded içerik
+        Article içeriğini al - document.body.innerText kullanarak
         """
-        content = ""
+        content_parts = []
         main_window = self.driver.current_window_handle
 
-        # Tweet URL'sinden kendi ID'sini çıkar
-        own_tweet_id = ""
-        if "/status/" in tweet_url:
-            own_tweet_id = tweet_url.split("/status/")[-1].split("?")[0].split("/")[0]
-
         try:
-            # 1. Tweet sayfasını yeni tab'da aç
             self.driver.execute_script(f"window.open('{tweet_url}', '_blank');")
             self.driver.switch_to.window(self.driver.window_handles[-1])
-            time.sleep(2)
-            
-            original_url = self.driver.current_url
-            target_url = None
+            time.sleep(3)
 
-            # 2. Card veya embedded tweet linkini bul ve tıkla
-            try:
-                # Önce card wrapper içindeki linke bak
-                cards = self.driver.find_elements(By.CSS_SELECTOR, '[data-testid="card.wrapper"]')
-                for card in cards:
-                    try:
-                        card_links = card.find_elements(By.TAG_NAME, 'a')
-                        for link in card_links:
-                            href = link.get_attribute("href") or ""
-                            if "/status/" in href and own_tweet_id not in href:
-                                target_url = href
-                                print(f"    → Card linki bulundu: {href[:60]}...")
-                                self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", link)
-                                time.sleep(0.5)
-                                link.click()
-                                time.sleep(3)
-                                break
-                        if target_url:
-                            break
-                    except:
-                        continue
+            # Scroll yap
+            last_height = 0
+            for _ in range(20):
+                self.driver.execute_script("window.scrollBy(0, 1000);")
+                time.sleep(0.5)
+                new_height = self.driver.execute_script("return document.documentElement.scrollHeight")
+                if new_height == last_height:
+                    break
+                last_height = new_height
 
-                # Card'da bulamadıysak quoted tweet linkini dene
-                if not target_url:
-                    all_links = self.driver.find_elements(By.XPATH, '//a[contains(@href, "/status/")]')
-                    for link in all_links:
-                        href = link.get_attribute("href") or ""
-                        if "/status/" in href and own_tweet_id not in href:
-                            target_url = href
-                            print(f"    → Quoted tweet linki: {href[:60]}...")
-                            self.driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", link)
-                            time.sleep(0.5)
-                            link.click()
-                            time.sleep(3)
-                            break
+            self.driver.execute_script("window.scrollTo(0, 0);")
+            time.sleep(0.5)
 
-            except Exception as e:
-                print(f"    [!] Link tıklama hatası: {str(e)[:30]}")
+            # Tüm sayfa text'ini al
+            page_text = self.driver.execute_script("return document.body.innerText;")
+            lines = page_text.split('\n')
 
-            # 3. Yeni sayfadaki içeriği al
-            if self.driver.current_url != original_url or target_url:
-                time.sleep(2)
-                content = self._extract_full_tweet_content()
-                
-            if content:
-                print(f"    ✓ {len(content)} karakter içerik alındı")
-            else:
-                print(f"    [!] İçerik alınamadı")
+            skip_patterns = [
+                'home', 'explore', 'notifications', 'messages', 'grok',
+                'premium', 'profile', 'more', 'post', 'subscribe',
+                'follow', 'following', 'followers', 'likes', 'bookmark', 'share',
+                'reply', 'repost', 'quote', 'view', 'show', 'hide',
+                'keyboard shortcuts', 'article', 'conversation',
+                'relevant people', 'terms of service', 'privacy policy',
+                '© 2', 'log out', 'settings', 'trending',
+                'reposted', 'liked', 'joined', 'posts', 'replies', 'media',
+            ]
+
+            collecting = False
+
+            for line in lines:
+                line = line.strip()
+                if not line or len(line) < 40:
+                    if ' – ' in line:
+                        content_parts.append(f"\n## {line}\n")
+                        collecting = True
+                    continue
+
+                line_lower = line.lower()
+                if any(skip in line_lower for skip in skip_patterns):
+                    continue
+                if line.startswith('@'):
+                    continue
+
+                if len(line) > 60:
+                    collecting = True
+                    if line not in content_parts:
+                        content_parts.append(line)
+
+            result = "\n\n".join(content_parts)
+            print(f"    ✓ Article: {len(result)} karakter")
+            return result
 
         except Exception as e:
-            print(f"    [!] Article hatası: {str(e)[:50]}")
+            print(f"    [!] Article hata: {str(e)[:50]}")
+            return ""
         finally:
-            # Tab'ı kapat ve ana pencereye dön
             try:
                 if len(self.driver.window_handles) > 1:
                     self.driver.close()
                 self.driver.switch_to.window(main_window)
             except:
                 pass
-
-        return content
-
-    def _extract_full_tweet_content(self) -> str:
-        """
-        Tweet sayfasından tam içeriği al (article veya uzun tweet)
-        Scroll yaparak tüm içeriği yükle
-
-        Returns:
-            Tweet/article içeriği
-        """
-        try:
-            # Sayfanın başına git
-            self.driver.execute_script("window.scrollTo(0, 0);")
-            time.sleep(1.5)
-
-            collected_texts = []
-
-            # Ana tweet'in metnini al (ilk article elementi)
-            try:
-                # İlk (ana) tweet
-                main_article = self.driver.find_element(By.XPATH, '(//article[@data-testid="tweet"])[1]')
-                
-                # Tweet text'ini al
-                text_elements = main_article.find_elements(By.XPATH, './/*[@data-testid="tweetText"]')
-                for elem in text_elements:
-                    text = elem.text.strip()
-                    if text and text not in collected_texts:
-                        collected_texts.append(text)
-
-            except NoSuchElementException:
-                pass
-
-            # Eğer metin kısaysa, sayfa scroll yaparak daha fazla içerik olup olmadığına bak
-            # (Article'lar çok uzun olabilir)
-            total_text = "\n\n".join(collected_texts)
-            
-            if len(total_text) < 500:
-                # Belki thread var, birkaç tweet daha kontrol et
-                try:
-                    # Sayfadaki URL'den username'i al
-                    current_url = self.driver.current_url
-                    username = ""
-                    if "x.com/" in current_url:
-                        username = current_url.split("x.com/")[1].split("/")[0]
-
-                    if username:
-                        # Scroll yap ve aynı kullanıcının diğer tweetlerini al (thread)
-                        for _ in range(5):  # Max 5 scroll
-                            self.driver.execute_script("window.scrollBy(0, 500);")
-                            time.sleep(0.5)
-
-                        all_articles = self.driver.find_elements(By.XPATH, '//article[@data-testid="tweet"]')
-                        for art in all_articles[:10]:  # Max 10 tweet
-                            try:
-                                # Bu tweet aynı kullanıcıya mı ait?
-                                art_links = art.find_elements(By.XPATH, f'.//a[contains(@href, "/{username}/")]')
-                                if art_links:
-                                    text_elem = art.find_element(By.XPATH, './/*[@data-testid="tweetText"]')
-                                    t = text_elem.text.strip()
-                                    if t and t not in collected_texts:
-                                        collected_texts.append(t)
-                            except:
-                                continue
-                except:
-                    pass
-
-            return "\n\n".join(collected_texts)
-
-        except Exception as e:
-            print(f"    [!] İçerik çıkarma hatası: {str(e)[:30]}")
-            return ""
 
     def _scroll_down(self):
         """Sayfayı aşağı kaydır ve yeni içerik yüklenmesini bekle"""
@@ -716,49 +631,61 @@ class XScraper:
         print(f"{count} tweet toplanıyor...")
         print("(İptal etmek için Ctrl+C - toplananlar kaydedilecek)\n")
         self.tweets_collected = []  # Instance variable olarak sakla
-        no_new_tweets_count = 0
-        max_no_new_tweets = 20  # Ardışık 20 scroll'da yeni tweet yoksa dur
+        stale_scroll_count = 0  # Scroll yapıp DOM'da yeni article gelmeyen sayı
+        max_stale_scrolls = 10  # Ardışık 10 scroll'da DOM'da yeni element yoksa dur
         last_height = 0
+        same_height_count = 0
 
         try:
             while len(self.tweets_collected) < count:
+                # Scroll öncesi DOM'daki article sayısı
+                articles_before = len(self.driver.find_elements(By.XPATH, XPATHS["tweet_article"]))
+
                 # Mevcut tweetleri topla
                 articles = self.driver.find_elements(By.XPATH, XPATHS["tweet_article"])
-                new_tweets_found = False
 
                 for article in articles:
                     if len(self.tweets_collected) >= count:
                         break
 
-                    tweet = self._parse_tweet_element(article)
-                    if tweet:
-                        self.tweets_collected.append(tweet)
-                        new_tweets_found = True
-                        article_tag = " [ARTICLE]" if tweet.has_article else ""
-                        show_more_tag = " [SHOW MORE]" if tweet.needs_full_text else ""
-                        print(f"  [{len(self.tweets_collected)}/{count}] Tweet toplandı: {tweet.date_str}{article_tag}{show_more_tag}")
-
-                if new_tweets_found:
-                    no_new_tweets_count = 0
-                else:
-                    no_new_tweets_count += 1
-
-                # Sayfa sonuna ulaşıp ulaşmadığını kontrol et
-                new_height = self.driver.execute_script("return document.body.scrollHeight")
-                if new_height == last_height and no_new_tweets_count >= 5:
-                    # Sayfa yüklenmiyor, biraz daha bekle
-                    time.sleep(2)
-                    new_height = self.driver.execute_script("return document.body.scrollHeight")
-                    if new_height == last_height:
-                        no_new_tweets_count += 5  # Hızla durma sayacını artır
-                last_height = new_height
-
-                if no_new_tweets_count >= max_no_new_tweets:
-                    print("Daha fazla tweet bulunamadı.")
-                    break
+                    result = self._parse_tweet_element(article)
+                    # SKIP_ALREADY_COLLECTED = zaten toplandı, bu "yeni tweet yok" değil
+                    if result == SKIP_ALREADY_COLLECTED:
+                        continue
+                    if result is None:
+                        continue
+                    tweet = result
+                    self.tweets_collected.append(tweet)
+                    article_tag = " [ARTICLE]" if tweet.has_article else ""
+                    show_more_tag = " [SHOW MORE]" if tweet.needs_full_text else ""
+                    print(f"  [{len(self.tweets_collected)}/{count}] Tweet toplandı: {tweet.date_str}{article_tag}{show_more_tag}")
 
                 # Aşağı kaydır
                 self._scroll_down()
+
+                # Scroll sonrası DOM'daki article sayısı
+                articles_after = len(self.driver.find_elements(By.XPATH, XPATHS["tweet_article"]))
+
+                # Sayfa sonu tespiti: scroll height değişmedi mi?
+                new_height = self.driver.execute_script("return document.body.scrollHeight")
+                if new_height == last_height:
+                    same_height_count += 1
+                else:
+                    same_height_count = 0
+                last_height = new_height
+
+                # DOM'da yeni article geldi mi?
+                if articles_after <= articles_before and same_height_count >= 3:
+                    stale_scroll_count += 1
+                    # Ekstra bekleme ile bir şans daha ver
+                    if stale_scroll_count <= 3:
+                        time.sleep(3)
+                else:
+                    stale_scroll_count = 0
+
+                if stale_scroll_count >= max_stale_scrolls:
+                    print("Sayfa sonuna ulaşıldı, daha fazla tweet yüklenmiyor.")
+                    break
 
         except KeyboardInterrupt:
             print(f"\n\nDurduruldu! {len(self.tweets_collected)} tweet toplandı.")
@@ -772,9 +699,7 @@ class XScraper:
 
     def _process_show_more_tweets(self):
         """Show more ve article olan tweetlerin tam metnini al (scroll bittikten sonra)"""
-        # Show more tweetler
         show_more_tweets = [t for t in self.tweets_collected if t.needs_full_text]
-        # Article tweetler
         article_tweets = [t for t in self.tweets_collected if t.has_article]
 
         total = len(show_more_tweets) + len(article_tweets)
@@ -784,7 +709,6 @@ class XScraper:
         print(f"\n{total} uzun içerik alınıyor ({len(show_more_tweets)} show more, {len(article_tweets)} article)...")
         current = 0
 
-        # Show more tweetleri işle
         for tweet in show_more_tweets:
             current += 1
             try:
@@ -796,23 +720,20 @@ class XScraper:
             except Exception as e:
                 print(f"    [!] Hata: {str(e)[:30]}")
 
-        # Article tweetleri işle
         for tweet in article_tweets:
             current += 1
             try:
-                print(f"  [{current}/{total}] Article içeriği alınıyor: {tweet.tweet_url[:50]}...")
+                print(f"  [{current}/{total}] Article içeriği alınıyor...")
                 article_content = self._get_article_content(tweet.tweet_url)
                 if article_content:
-                    content_preview = article_content[:100].replace('\n', ' ')
-                    print(f"    ✓ {len(article_content)} karakter alındı: {content_preview}...")
-                    # Article içeriğini tweet metnine ekle
                     if tweet.text:
                         tweet.text = tweet.text + "\n\n--- ARTICLE İÇERİĞİ ---\n\n" + article_content
                     else:
                         tweet.text = article_content
                     tweet.has_article = False
+                    print(f"    ✓ {len(article_content)} karakter alındı")
                 else:
-                    print(f"    ✗ Article içeriği alınamadı!")
+                    print(f"    ✗ Article içeriği alınamadı")
             except Exception as e:
                 print(f"    [!] Hata: {str(e)[:50]}")
 
@@ -847,7 +768,10 @@ class XScraper:
                 new_tweets_found = False
 
                 for article in articles:
-                    tweet = self._parse_tweet_element(article)
+                    result = self._parse_tweet_element(article)
+                    if result == SKIP_ALREADY_COLLECTED or result is None:
+                        continue
+                    tweet = result
                     if tweet:
                         # Tarih kontrolü
                         tweet_date = tweet.date.replace(tzinfo=None) if tweet.date.tzinfo else tweet.date
@@ -936,16 +860,18 @@ class XScraper:
                     if not get_all and count and len(self.tweets_collected) >= count:
                         break
 
-                    tweet = self._parse_tweet_element(article)
-                    if tweet:
-                        self.tweets_collected.append(tweet)
-                        new_tweets_found = True
-                        article_tag = " [ARTICLE]" if tweet.has_article else ""
-                        show_more_tag = " [SHOW MORE]" if tweet.needs_full_text else ""
-                        if count:
-                            print(f"  [{len(self.tweets_collected)}/{count}] Bookmark toplandı: {tweet.date_str}{article_tag}{show_more_tag}")
-                        else:
-                            print(f"  [{len(self.tweets_collected)}] Bookmark toplandı: {tweet.date_str}{article_tag}{show_more_tag}")
+                    result = self._parse_tweet_element(article)
+                    if result == SKIP_ALREADY_COLLECTED or result is None:
+                        continue
+                    tweet = result
+                    self.tweets_collected.append(tweet)
+                    new_tweets_found = True
+                    article_tag = " [ARTICLE]" if tweet.has_article else ""
+                    show_more_tag = " [SHOW MORE]" if tweet.needs_full_text else ""
+                    if count:
+                        print(f"  [{len(self.tweets_collected)}/{count}] Bookmark toplandı: {tweet.date_str}{article_tag}{show_more_tag}")
+                    else:
+                        print(f"  [{len(self.tweets_collected)}] Bookmark toplandı: {tweet.date_str}{article_tag}{show_more_tag}")
 
                 if new_tweets_found:
                     no_new_tweets_count = 0
