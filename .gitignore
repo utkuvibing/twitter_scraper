@@ -5,8 +5,18 @@ __pycache__/
 *.so
 .Python
 *.egg-info/
-dist/
 build/
+.sessions/
+
+# Node / Frontend
+node_modules/
+dist/
+
+# Rust / Tauri
+src-tauri/target/
+*.msi
+*.exe
+*.dmg
 
 # Output data (personal scraped data)
 output/

@@ -5,7 +5,7 @@ Desteklenen formatlar: .docx, .json, .md
 
 import json
 import os
-from typing import List
+from typing import List, Optional
 from datetime import datetime
 from docx import Document
 from docx.shared import Pt, Inches, RGBColor
@@ -17,19 +17,28 @@ from docx.enum.style import WD_STYLE_TYPE
 BASE_OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
 
 
-def get_output_path(target_username: str, filename: str) -> str:
+def get_output_path(
+    target_username: str, filename: str, output_dir: Optional[str] = None
+) -> str:
     """
     Kullanıcıya özel output klasörü oluştur ve tam yol döndür
 
     Args:
         target_username: Hedef kullanıcı adı
         filename: Dosya adı
+        output_dir: Özel output dizini (None ise default output kullanılır)
 
     Returns:
         Tam dosya yolu
     """
+    # Eğer özel output dizini verildiyse onu kullan, yoksa default
+    if output_dir and os.path.isdir(output_dir):
+        base_dir = output_dir
+    else:
+        base_dir = BASE_OUTPUT_DIR
+
     # Kullanıcıya özel klasör oluştur
-    user_output_dir = os.path.join(BASE_OUTPUT_DIR, target_username)
+    user_output_dir = os.path.join(base_dir, target_username)
     os.makedirs(user_output_dir, exist_ok=True)
 
     # Sadece dosya adını al (path içeriyorsa)
@@ -38,7 +47,12 @@ def get_output_path(target_username: str, filename: str) -> str:
     return os.path.join(user_output_dir, filename)
 
 
-def create_word_document(tweets: List, output_path: str, target_username: str) -> str:
+def create_word_document(
+    tweets: List,
+    output_path: str,
+    target_username: str,
+    output_dir: Optional[str] = None,
+) -> str:
     """
     Tweetleri Word document olarak kaydet
 
@@ -46,6 +60,7 @@ def create_word_document(tweets: List, output_path: str, target_username: str) -
         tweets: Tweet listesi (scraper.Tweet objeleri)
         output_path: Çıktı dosya yolu (.docx)
         target_username: Scrape edilen hesabın kullanıcı adı
+        output_dir: Özel output dizini (None ise default output kullanılır)
 
     Returns:
         Kaydedilen dosya yolu
@@ -96,7 +111,9 @@ def create_word_document(tweets: List, output_path: str, target_username: str) -
             for j, url in enumerate(tweet.media_urls):
                 if j > 0:
                     media_para.add_run(" | ")
-                media_link = media_para.add_run(url if len(url) < 80 else url[:77] + "...")
+                media_link = media_para.add_run(
+                    url if len(url) < 80 else url[:77] + "..."
+                )
                 media_link.font.size = Pt(8)
                 media_link.font.color.rgb = RGBColor(100, 100, 100)
 
@@ -119,15 +136,20 @@ def create_word_document(tweets: List, output_path: str, target_username: str) -
     if not output_path.endswith(".docx"):
         output_path += ".docx"
 
-    # Kullanıcıya özel output klasörüne kaydet
-    full_path = get_output_path(target_username, output_path)
+    # Kullanıcıya özel output klasörüne kaydet (seçilen dizini kullan)
+    full_path = get_output_path(target_username, output_path, output_dir)
     doc.save(full_path)
     print(f"Document kaydedildi: {full_path}")
 
     return full_path
 
 
-def create_simple_document(tweets: List, output_path: str, target_username: str) -> str:
+def create_simple_document(
+    tweets: List,
+    output_path: str,
+    target_username: str,
+    output_dir: Optional[str] = None,
+) -> str:
     """
     Basit formatta Word document oluştur (sadece metin ve tarih)
 
@@ -135,6 +157,7 @@ def create_simple_document(tweets: List, output_path: str, target_username: str)
         tweets: Tweet listesi
         output_path: Çıktı dosya yolu
         target_username: Kullanıcı adı
+        output_dir: Özel output dizini (None ise default output kullanılır)
 
     Returns:
         Dosya yolu
@@ -154,12 +177,17 @@ def create_simple_document(tweets: List, output_path: str, target_username: str)
     if not output_path.endswith(".docx"):
         output_path += ".docx"
 
-    full_path = get_output_path(target_username, output_path)
+    full_path = get_output_path(target_username, output_path, output_dir)
     doc.save(full_path)
     return full_path
 
 
-def create_json_document(tweets: List, output_path: str, target_username: str) -> str:
+def create_json_document(
+    tweets: List,
+    output_path: str,
+    target_username: str,
+    output_dir: Optional[str] = None,
+) -> str:
     """
     Tweetleri JSON formatında kaydet (MCP-ready)
 
@@ -167,6 +195,7 @@ def create_json_document(tweets: List, output_path: str, target_username: str) -
         tweets: Tweet listesi
         output_path: Çıktı dosya yolu
         target_username: Kullanıcı adı
+        output_dir: Özel output dizini (None ise default output kullanılır)
 
     Returns:
         Dosya yolu
@@ -176,7 +205,7 @@ def create_json_document(tweets: List, output_path: str, target_username: str) -
         "user": f"@{target_username}",
         "scraped_at": datetime.now().isoformat(),
         "total_tweets": len(tweets),
-        "tweets": []
+        "tweets": [],
     }
 
     for tweet in tweets:
@@ -188,14 +217,14 @@ def create_json_document(tweets: List, output_path: str, target_username: str) -
             "url": tweet.tweet_url,
             "has_media": len(tweet.media_urls) > 0,
             "media_urls": tweet.media_urls,
-            "has_article": getattr(tweet, 'has_article', False)
+            "has_article": getattr(tweet, "has_article", False),
         }
         data["tweets"].append(tweet_data)
 
     if not output_path.endswith(".json"):
         output_path += ".json"
 
-    full_path = get_output_path(target_username, output_path)
+    full_path = get_output_path(target_username, output_path, output_dir)
     with open(full_path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
@@ -203,7 +232,12 @@ def create_json_document(tweets: List, output_path: str, target_username: str) -
     return full_path
 
 
-def create_markdown_document(tweets: List, output_path: str, target_username: str) -> str:
+def create_markdown_document(
+    tweets: List,
+    output_path: str,
+    target_username: str,
+    output_dir: Optional[str] = None,
+) -> str:
     """
     Tweetleri Markdown formatında kaydet
 
@@ -211,6 +245,7 @@ def create_markdown_document(tweets: List, output_path: str, target_username: st
         tweets: Tweet listesi
         output_path: Çıktı dosya yolu
         target_username: Kullanıcı adı
+        output_dir: Özel output dizini (None ise default output kullanılır)
 
     Returns:
         Dosya yolu
@@ -234,7 +269,7 @@ def create_markdown_document(tweets: List, output_path: str, target_username: st
     if not output_path.endswith(".md"):
         output_path += ".md"
 
-    full_path = get_output_path(target_username, output_path)
+    full_path = get_output_path(target_username, output_path, output_dir)
     with open(full_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
 
