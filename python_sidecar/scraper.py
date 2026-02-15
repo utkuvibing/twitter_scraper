@@ -103,6 +103,7 @@ class XScraper:
         self.scroll_pause_min = scroll_pause_min or SCROLL_PAUSE_MIN
         self.scroll_pause_max = scroll_pause_max or SCROLL_PAUSE_MAX
         self.target_username = None  # Set by navigate_to_profile
+        self._skipped_tweet_ids = set()  # Track filtered/promo tweets to avoid re-parsing
 
         # State management
         self._paused = False
@@ -525,6 +526,7 @@ class XScraper:
                         level="debug",
                         message=f"[FILTER] Skipping reply (socialContext: {context_text[:50]})",
                     )
+                    # Note: tweet_id not yet extracted here, will be skipped by DOM replacement
                     return None
                 if "reposted" in context_text or "retweeted" in context_text:
                     self._emit(
@@ -586,8 +588,10 @@ class XScraper:
                 except Exception:
                     pass  # If URL parsing fails, don't filter
 
-            # Already collected check
+            # Already collected or already skipped check
             if tweet_id in self.collected_tweet_ids:
+                return SKIP_ALREADY_COLLECTED
+            if tweet_id in self._skipped_tweet_ids:
                 return SKIP_ALREADY_COLLECTED
 
             # Tweet text
@@ -599,6 +603,34 @@ class XScraper:
                 text = text_element.text
             except NoSuchElementException:
                 pass
+
+            # If no tweetText found, try to get text from article card or other elements
+            if not text:
+                try:
+                    card = article.find_element(
+                        By.CSS_SELECTOR, '[data-testid="card.wrapper"]'
+                    )
+                    # Get ALL text from card - title, description, domain etc.
+                    card_all_text = card.text.strip()
+                    if card_all_text:
+                        # Filter out very short UI-like lines, keep meaningful content
+                        card_lines = [l.strip() for l in card_all_text.split("\n") if l.strip() and len(l.strip()) > 3]
+                        if card_lines:
+                            text = " | ".join(card_lines)
+                except:
+                    pass
+
+            # Still no text? Try any visible text content in the tweet
+            if not text:
+                try:
+                    all_spans = article.find_elements(
+                        By.XPATH, './/div[@dir="auto"]//span[string-length(text()) > 10]'
+                    )
+                    span_texts = [s.text.strip() for s in all_spans if s.text.strip() and not s.text.startswith("@")]
+                    if span_texts:
+                        text = span_texts[0]
+                except:
+                    pass
 
             # "Show more" check
             has_show_more = False
@@ -649,8 +681,8 @@ class XScraper:
             except:
                 pass
 
-            # Promo tweet filter - only skip if multiple promo signals found
-            if text:
+            # Promo tweet filter - skip unless tweet has an article
+            if text and not has_article:
                 text_lower = text.lower()
                 promo_patterns = [
                     "link in bio",
@@ -662,6 +694,8 @@ class XScraper:
                 ]
                 promo_hits = [p for p in promo_patterns if p in text_lower]
                 if promo_hits:
+                    if tweet_id:
+                        self._skipped_tweet_ids.add(tweet_id)
                     self._emit(
                         "log",
                         level="debug",
@@ -866,185 +900,202 @@ class XScraper:
         return text
 
     def _get_article_content(self, tweet_url: str) -> str:
-        """Extract article content"""
+        """Extract article content by opening tweet page, then clicking into the article"""
         content_parts = []
         main_window = self.driver.current_window_handle
         start_time = time.time()
-        max_time = 15  # Max 15 seconds per article
+        max_time = 20  # Max 20 seconds per article
 
         self._emit("log", level="info", message=f"ARTICLE: Opening tab for {tweet_url}")
 
-        # Set page load timeout for tab operations
         try:
             self.driver.set_page_load_timeout(15)
-        except Exception as e:
-            self._emit(
-                "log", level="warning", message=f"ARTICLE: Could not set timeout: {e}"
-            )
+        except:
+            pass
 
         try:
-            self._emit("log", level="info", message="ARTICLE: Opening new tab...")
             self.driver.execute_script(f"window.open('{tweet_url}', '_blank');")
-            self._emit("log", level="info", message="ARTICLE: Switching to new tab...")
             self.driver.switch_to.window(self.driver.window_handles[-1])
-            self._emit("log", level="info", message="ARTICLE: Waiting for page load...")
-            time.sleep(1)  # Reduced from 2
+            time.sleep(2)
 
-            # Scroll through article (max 5 iterations instead of 10)
-            self._emit(
-                "log", level="info", message="ARTICLE: Scrolling to load content..."
-            )
-            last_height = 0
-            scroll_count = 0
-            for i in range(5):
-                self.driver.execute_script("window.scrollBy(0, 1000);")
-                time.sleep(0.2)  # Reduced from 0.3
-                new_height = self.driver.execute_script(
-                    "return document.documentElement.scrollHeight"
+            # Step 1: Try to find the article link inside the card
+            article_url = None
+            try:
+                # X native articles: /i/articles/ links
+                article_links = self.driver.find_elements(
+                    By.XPATH, '//a[contains(@href, "/i/articles/")]'
                 )
-                scroll_count += 1
+                if article_links:
+                    article_url = article_links[0].get_attribute("href")
+                    self._emit("log", level="info", message=f"ARTICLE: Found X article link: {article_url}")
+            except:
+                pass
+
+            if not article_url:
+                try:
+                    # Card wrapper links (external articles or X articles)
+                    card = self.driver.find_element(By.CSS_SELECTOR, '[data-testid="card.wrapper"]')
+                    card_links = card.find_elements(By.TAG_NAME, "a")
+                    for link in card_links:
+                        href = link.get_attribute("href") or ""
+                        if href and "/status/" not in href and "x.com/i/" not in href.replace("/i/articles/", "KEEP"):
+                            article_url = href
+                            self._emit("log", level="info", message=f"ARTICLE: Found card link: {article_url}")
+                            break
+                        if "/i/articles/" in href:
+                            article_url = href
+                            self._emit("log", level="info", message=f"ARTICLE: Found card article link: {article_url}")
+                            break
+                except:
+                    pass
+
+            # Step 2: If we found an article URL, navigate to it
+            if article_url:
+                try:
+                    self.driver.get(article_url)
+                    time.sleep(3)
+                    self._emit("log", level="info", message="ARTICLE: Navigated to article page")
+                except:
+                    self._emit("log", level="warning", message="ARTICLE: Failed to navigate to article URL")
+
+            # Step 3: Scroll to load full content
+            last_height = 0
+            for i in range(8):
+                self.driver.execute_script("window.scrollBy(0, 800);")
+                time.sleep(0.3)
+                new_height = self.driver.execute_script("return document.documentElement.scrollHeight")
                 if new_height == last_height:
-                    self._emit(
-                        "log",
-                        level="info",
-                        message=f"ARTICLE: Reached end after {scroll_count} scrolls",
-                    )
                     break
                 last_height = new_height
 
-            self._emit(
-                "log",
-                level="info",
-                message=f"ARTICLE: Scrolled {scroll_count} times, extracting content...",
-            )
             self.driver.execute_script("window.scrollTo(0, 0);")
-            time.sleep(1)  # Reduced from 0.5 (wait for content to settle)
+            time.sleep(0.5)
 
+            # Step 4: Extract content - different strategy for article pages vs tweet pages
             page_text = self.driver.execute_script("return document.body.innerText;")
             self._emit(
-                "log",
-                level="info",
-                message=f"ARTICLE: Got page text, length: {len(page_text)} chars",
+                "log", level="info",
+                message=f"ARTICLE: Page text length: {len(page_text)} chars",
             )
+
             lines = page_text.split("\n")
 
-            skip_patterns = [
-                "home",
-                "explore",
-                "notifications",
-                "messages",
-                "grok",
-                "premium",
-                "profile",
-                "more",
-                "post",
-                "subscribe",
-                "follow",
-                "following",
-                "followers",
-                "likes",
-                "bookmark",
-                "share",
-                "reply",
-                "repost",
-                "quote",
-                "view",
-                "show",
-                "hide",
-                "keyboard shortcuts",
-                "article",
-                "conversation",
-                "relevant people",
-                "terms of service",
-                "privacy policy",
-                "© 2",
-                "log out",
-                "settings",
-                "trending",
-                "reposted",
-                "liked",
-                "joined",
-                "posts",
-                "replies",
-                "media",
-            ]
-
-            collecting = False
+            # Navigation/UI elements to skip (only exact single-word items)
+            skip_exact = {
+                "home", "explore", "notifications", "messages", "grok",
+                "premium", "profile", "more", "post", "subscribe",
+                "following", "followers", "bookmark", "share", "reply",
+                "repost", "quote", "show", "hide", "settings",
+                "trending", "reposted", "liked", "joined", "media",
+                "log out", "keyboard shortcuts", "relevant people",
+                "terms of service", "privacy policy", "conversation",
+            }
 
             for line in lines:
                 line = line.strip()
-                if not line or len(line) < 40:
-                    if " – " in line:
-                        content_parts.append(f"\n## {line}\n")
-                        collecting = True
+                if not line:
                     continue
 
-                line_lower = line.lower()
-                if any(skip in line_lower for skip in skip_patterns):
-                    continue
+                # Skip very short lines that are likely UI elements
+                if len(line) < 15:
+                    line_lower = line.lower()
+                    if line_lower in skip_exact or any(s == line_lower for s in skip_exact):
+                        continue
+
+                # Skip lines starting with @ (usernames)
                 if line.startswith("@"):
                     continue
 
-                if len(line) > 60:
-                    collecting = True
+                # Skip obvious UI patterns
+                line_lower = line.lower()
+                if line_lower.startswith("© 2"):
+                    continue
+
+                # Collect meaningful content (lines > 20 chars that aren't UI)
+                if len(line) >= 20:
                     if line not in content_parts:
                         content_parts.append(line)
 
             result = "\n\n".join(content_parts)
             self._emit(
-                "log",
-                level="info",
-                message=f"Article: {len(result)} characters extracted",
+                "log", level="info",
+                message=f"ARTICLE: Extracted {len(result)} chars from {len(content_parts)} paragraphs",
             )
 
-            # Check if we exceeded max time
             elapsed = time.time() - start_time
             if elapsed > max_time:
                 self._emit(
-                    "log",
-                    level="warning",
-                    message=f"Article fetch took {elapsed:.1f}s (max {max_time}s)",
+                    "log", level="warning",
+                    message=f"ARTICLE: Took {elapsed:.1f}s (max {max_time}s)",
                 )
 
             return result
 
         except Exception as e:
-            error_msg = str(e)
-            self._emit(
-                "log", level="error", message=f"ARTICLE ERROR: {error_msg[:100]}"
-            )
-            import traceback
-
-            self._emit(
-                "log",
-                level="debug",
-                message=f"ARTICLE TRACEBACK: {traceback.format_exc()[:200]}",
-            )
+            self._emit("log", level="error", message=f"ARTICLE ERROR: {str(e)[:100]}")
             return ""
         finally:
-            self._emit(
-                "log",
-                level="info",
-                message="ARTICLE: Closing tab and returning to profile...",
-            )
             self._close_extra_tabs(main_window)
-            # Restore default page load timeout
             try:
                 self.driver.set_page_load_timeout(30)
             except:
                 pass
 
-    def _scroll_recovery(self):
-        """Recovery when scroll gets stuck: scroll to top, wait, then gradually scroll down"""
+    def _click_retry_buttons(self):
+        """Find and click any 'Retry' or 'Try again' buttons on the page"""
         try:
-            # Scroll to top
+            retry_selectors = [
+                '//button[contains(text(), "Retry")]',
+                '//button[contains(text(), "Try again")]',
+                '//button[contains(text(), "Tekrar dene")]',
+                '//span[contains(text(), "Retry")]/ancestor::button',
+                '//span[contains(text(), "Try again")]/ancestor::button',
+                '//div[@role="button"][contains(., "Retry")]',
+            ]
+            for xpath in retry_selectors:
+                try:
+                    btns = self.driver.find_elements(By.XPATH, xpath)
+                    for btn in btns:
+                        if btn.is_displayed():
+                            btn.click()
+                            self._emit("log", level="info", message=f"Clicked retry button: {btn.text[:30]}")
+                            time.sleep(2)
+                            return True
+                except:
+                    pass
+        except:
+            pass
+        return False
+
+    def _scroll_recovery(self):
+        """Recovery when scroll gets stuck"""
+        try:
+            # Dismiss any overlays/popups blocking scroll
+            self._dismiss_overlays()
+
+            # Check for retry/error buttons
+            self._click_retry_buttons()
+
+            # Check for timeline blockers (show more buttons, spinners)
+            self._check_timeline_blockers()
+
+            # Scroll to top first
             self.driver.execute_script("window.scrollTo(0, 0);")
             time.sleep(2)
 
-            # Gradually scroll down to trigger X's lazy loading
+            # Use keyboard to scroll down (more reliable than JS scroll)
+            body = self.driver.find_element(By.TAG_NAME, "body")
+            body.click()  # Ensure focus is on the page
+            time.sleep(0.3)
+
+            for i in range(10):
+                body.send_keys(Keys.SPACE)
+                time.sleep(0.6)
+
+            # Also do JS scrolls to complement keyboard
             for i in range(5):
-                self.driver.execute_script("window.scrollBy(0, 600);")
-                time.sleep(0.8)
+                self.driver.execute_script("window.scrollBy(0, 800);")
+                time.sleep(0.5)
 
             # Final wait for content to load
             time.sleep(2)
@@ -1062,13 +1113,105 @@ class XScraper:
                 message=f"Recovery scroll error: {str(e)[:80]}",
             )
 
+    def _dismiss_overlays(self):
+        """Dismiss any popups/overlays that might block scrolling"""
+        try:
+            # Close "Sign up" / "Log in" / cookie popups
+            close_xpaths = [
+                '//button[@aria-label="Close"]',
+                '//div[@role="button"][@aria-label="Close"]',
+                '//button[contains(@class, "closeBtn")]',
+            ]
+            for xpath in close_xpaths:
+                try:
+                    btns = self.driver.find_elements(By.XPATH, xpath)
+                    for btn in btns:
+                        if btn.is_displayed():
+                            btn.click()
+                            self._emit("log", level="info", message="Dismissed overlay popup")
+                            time.sleep(0.5)
+                            return True
+                except:
+                    pass
+
+            # Press Escape to dismiss any modal
+            try:
+                self.driver.find_element(By.TAG_NAME, "body").send_keys(Keys.ESCAPE)
+                time.sleep(0.3)
+            except:
+                pass
+        except:
+            pass
+        return False
+
+    def _check_timeline_blockers(self):
+        """Check for and handle timeline loading blockers (retry buttons, show more, spinners)"""
+        try:
+            # Check for retry/error buttons
+            if self._click_retry_buttons():
+                return True
+
+            # Check for "Show more tweets" button in timeline
+            show_more_xpaths = [
+                '//span[contains(text(), "Show more")]/ancestor::div[@role="button"]',
+                '//span[contains(text(), "Daha fazla")]/ancestor::div[@role="button"]',
+                '//div[@role="button"][.//span[contains(text(), "Show")]]',
+            ]
+            for xpath in show_more_xpaths:
+                try:
+                    btns = self.driver.find_elements(By.XPATH, xpath)
+                    for btn in btns:
+                        if btn.is_displayed():
+                            btn.click()
+                            self._emit("log", level="info", message="Clicked 'Show more' button")
+                            time.sleep(2)
+                            return True
+                except:
+                    pass
+
+            # Wait for loading spinner to disappear
+            try:
+                spinners = self.driver.find_elements(By.XPATH, '//div[@role="progressbar"]')
+                for spinner in spinners:
+                    if spinner.is_displayed():
+                        self._emit("log", level="debug", message="[DEBUG] Loading spinner detected, waiting...")
+                        try:
+                            WebDriverWait(self.driver, 5).until_not(
+                                EC.visibility_of(spinner)
+                            )
+                        except TimeoutException:
+                            pass
+                        time.sleep(0.5)
+                        return True
+            except:
+                pass
+        except:
+            pass
+        return False
+
+    def _get_article_ids_fast(self, articles):
+        """Extract tweet IDs from article elements quickly"""
+        ids = set()
+        for art in articles:
+            try:
+                time_el = art.find_element(By.TAG_NAME, "time")
+                link = time_el.find_element(By.XPATH, "./ancestor::a")
+                href = link.get_attribute("href")
+                if href and "/status/" in href:
+                    sid = href.split("/status/")[-1].split("?")[0].split("/")[0]
+                    if sid:
+                        ids.add(sid)
+            except:
+                pass
+        return ids
+
     def _scroll_down(self):
-        """Scroll page down and wait for new content"""
+        """Scroll page down and wait for new content using multiple strategies"""
         import time as time_module
 
         self._emit("log", level="debug", message="[DEBUG] Starting scroll...")
 
-        # Track scroll position and article IDs instead of just count
+        # Track current state
         old_scroll_pos = 0
         old_count = 0
         old_ids = set()
@@ -1076,18 +1219,7 @@ class XScraper:
             old_scroll_pos = self.driver.execute_script("return window.pageYOffset;")
             old_articles = self.driver.find_elements(By.XPATH, XPATHS["tweet_article"])
             old_count = len(old_articles)
-            # Track IDs of currently visible articles to detect replacement
-            for art in old_articles:
-                try:
-                    time_el = art.find_element(By.TAG_NAME, "time")
-                    link = time_el.find_element(By.XPATH, "./ancestor::a")
-                    href = link.get_attribute("href")
-                    if href and "/status/" in href:
-                        sid = href.split("/status/")[-1].split("?")[0].split("/")[0]
-                        if sid:
-                            old_ids.add(sid)
-                except:
-                    pass
+            old_ids = self._get_article_ids_fast(old_articles)
         except Exception as e:
             self._emit(
                 "log", level="warning", message=f"[DEBUG] Error finding articles: {e}"
@@ -1099,35 +1231,54 @@ class XScraper:
             message=f"[DEBUG] Found {old_count} tweets before scroll (pos: {old_scroll_pos})",
         )
 
-        # Multi-strategy scroll to trigger X's lazy loading
+        # === Multi-strategy scroll ===
+
+        # Strategy 1: Scroll last article into view to trigger X's IntersectionObserver
         try:
             articles = self.driver.find_elements(By.XPATH, XPATHS["tweet_article"])
             if articles:
-                # Strategy 1: Scroll last article into view + extra distance
                 self.driver.execute_script(
-                    "arguments[0].scrollIntoView(false);", articles[-1]
+                    "arguments[0].scrollIntoView({block: 'end', behavior: 'instant'});",
+                    articles[-1]
                 )
+                time_module.sleep(0.3)
+                # Push a bit past the last article
+                self.driver.execute_script("window.scrollBy(0, 300);")
                 time_module.sleep(0.2)
-                # Scroll further past to trigger loading zone
-                self.driver.execute_script("window.scrollBy(0, 1200);")
-            else:
-                self.driver.execute_script(
-                    "window.scrollTo(0, document.body.scrollHeight);"
-                )
+        except:
+            pass
+
+        # Strategy 2: Gradual viewport scrolls
+        try:
+            for _ in range(3):
+                self.driver.execute_script("window.scrollBy(0, window.innerHeight);")
+                time_module.sleep(0.15)
         except Exception as e:
             self._emit("log", level="warning", message=f"[DEBUG] Scroll error: {e}")
             self.driver.execute_script(
                 "window.scrollTo(0, document.body.scrollHeight);"
             )
 
+        # Strategy 3: Keyboard scroll (harder for X to block, triggers native scroll events)
+        try:
+            active = self.driver.switch_to.active_element
+            active.send_keys(Keys.PAGE_DOWN)
+            time_module.sleep(0.1)
+            active.send_keys(Keys.PAGE_DOWN)
+        except:
+            pass
+
         time_module.sleep(random.uniform(self.scroll_pause_min, self.scroll_pause_max))
 
+        # Check for timeline blockers (retry buttons, show more, spinners)
+        self._check_timeline_blockers()
+
         # Check for new content: both count increase AND new tweet IDs
-        scroll_timeout = 5
+        scroll_timeout = 8
         start_time = time_module.time()
         found_new = False
 
-        for i in range(10):
+        for i in range(15):
             if time_module.time() - start_time > scroll_timeout:
                 self._emit(
                     "log", level="debug", message="[DEBUG] Scroll timeout reached"
@@ -1148,21 +1299,10 @@ class XScraper:
                     found_new = True
                     break
 
-                # Also check if articles were replaced (same count but different IDs)
-                new_ids = set()
-                for art in new_articles:
-                    try:
-                        time_el = art.find_element(By.TAG_NAME, "time")
-                        link = time_el.find_element(By.XPATH, "./ancestor::a")
-                        href = link.get_attribute("href")
-                        if href and "/status/" in href:
-                            sid = href.split("/status/")[-1].split("?")[0].split("/")[0]
-                            if sid:
-                                new_ids.add(sid)
-                    except:
-                        pass
-
-                unseen_ids = new_ids - old_ids - self.collected_tweet_ids
+                # Check if articles were replaced (same count but different IDs)
+                new_ids = self._get_article_ids_fast(new_articles)
+                # Consider both truly new IDs and previously skipped IDs as "new content"
+                unseen_ids = new_ids - old_ids - self.collected_tweet_ids - self._skipped_tweet_ids
                 if unseen_ids:
                     self._emit(
                         "log",
@@ -1180,13 +1320,15 @@ class XScraper:
 
         if not found_new:
             self._emit(
-                "log", level="debug", message="[DEBUG] No new tweets after 10 attempts"
+                "log", level="debug", message="[DEBUG] No new tweets after scroll wait"
             )
-            # Try a more aggressive scroll as fallback
+            # Aggressive fallback: scroll to absolute bottom + End key
             try:
                 self.driver.execute_script(
                     "window.scrollTo(0, document.body.scrollHeight);"
                 )
+                time_module.sleep(0.5)
+                self.driver.find_element(By.TAG_NAME, "body").send_keys(Keys.END)
                 time_module.sleep(1.0)
             except:
                 pass
@@ -1208,12 +1350,13 @@ class XScraper:
         """
         self._emit("log", level="info", message=f"Collecting {count} tweets...")
         self.tweets_collected = []
+        self._skipped_tweet_ids = set()
         stale_scroll_count = 0
-        max_stale_scrolls = 10
+        max_stale_scrolls = 15
         last_height = 0
         same_height_count = 0
         no_new_tweets_count = 0
-        max_no_new_tweets = 8
+        max_no_new_tweets = 20
 
         try:
             loop_count = 0
@@ -1292,14 +1435,60 @@ class XScraper:
                     )
                     break
 
-                # Recovery: if stuck for 3+ loops, scroll to top and back down
+                # Recovery strategies at increasing desperation levels
                 if no_new_tweets_count == 3:
                     self._emit(
-                        "log",
-                        level="info",
-                        message="Scroll stuck, trying recovery: scroll to top then back down...",
+                        "log", level="info",
+                        message=f"Scroll stuck ({no_new_tweets_count} cycles), trying recovery...",
                     )
                     self._scroll_recovery()
+                    time.sleep(1)
+                elif no_new_tweets_count == 7:
+                    # More aggressive: refresh the page and re-scroll to where we were
+                    self._emit(
+                        "log", level="info",
+                        message="Scroll stuck badly, refreshing page...",
+                    )
+                    try:
+                        self.driver.refresh()
+                        time.sleep(5)
+                        # Wait for tweets to appear again
+                        WebDriverWait(self.driver, 15).until(
+                            EC.presence_of_element_located(
+                                (By.XPATH, '//article[@data-testid="tweet"]')
+                            )
+                        )
+                        time.sleep(3)
+
+                        # Dismiss any overlays that appeared after refresh
+                        self._dismiss_overlays()
+
+                        # Scroll past already-collected tweets using keyboard + JS
+                        body = self.driver.find_element(By.TAG_NAME, "body")
+                        body.click()
+                        scroll_steps = max(len(self.tweets_collected) * 2, 10)
+                        for step in range(scroll_steps):
+                            body.send_keys(Keys.SPACE)
+                            time.sleep(0.3)
+                            if step % 3 == 0:
+                                self.driver.execute_script("window.scrollBy(0, 600);")
+                                time.sleep(0.2)
+
+                        time.sleep(3)
+                        articles = self.driver.find_elements(By.XPATH, XPATHS["tweet_article"])
+                        self._emit(
+                            "log", level="info",
+                            message=f"After page refresh: {len(articles)} articles in DOM",
+                        )
+                    except Exception as e:
+                        self._emit("log", level="warning", message=f"Refresh recovery failed: {str(e)[:80]}")
+                elif no_new_tweets_count == 12:
+                    self._emit(
+                        "log", level="info",
+                        message="Last resort recovery: scroll + keyboard...",
+                    )
+                    self._scroll_recovery()
+                    time.sleep(2)
 
                 self._emit(
                     "log",
@@ -1437,8 +1626,9 @@ class XScraper:
             message=f"Date range: {start_date.strftime('%Y-%m-%d')} - {end_date.strftime('%Y-%m-%d')}",
         )
         self.tweets_collected = []
+        self._skipped_tweet_ids = set()
         no_new_tweets_count = 0
-        max_no_new_tweets = 5
+        max_no_new_tweets = 15
         reached_start_date = False
 
         try:
@@ -1543,6 +1733,7 @@ class XScraper:
             self._emit("log", level="info", message=f"Collecting {count} bookmarks...")
 
         self.tweets_collected = []
+        self._skipped_tweet_ids = set()
         no_new_tweets_count = 0
         max_no_new_tweets = 10
 

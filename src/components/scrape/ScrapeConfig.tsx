@@ -31,11 +31,6 @@ function ScrapeConfig() {
   const [days, setDays] = useState(7);
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
-  const [outputFormats, setOutputFormats] = useState({
-    json: true,
-    markdown: false,
-    word: false,
-  });
 
   const isConnected = authStatus === 'connected';
   const isConnecting = authStatus === 'connecting' || authStatus === 'waiting';
@@ -46,7 +41,6 @@ function ScrapeConfig() {
     if (mode === 'count' && count <= 0) return false;
     if (mode === 'days' && days <= 0) return false;
     if (mode === 'date_range' && (!startDate || !endDate)) return false;
-    if (!outputFormats.json && !outputFormats.markdown && !outputFormats.word) return false;
     return true;
   };
 
@@ -303,33 +297,6 @@ function ScrapeConfig() {
             </div>
           </div>
         )}
-
-        {/* Output format */}
-        <div>
-          <label className="block text-xs font-medium text-x-gray mb-2">
-            {t('scrape.outputFormat')}
-          </label>
-          <div className="space-y-1.5">
-            {(['json', 'markdown', 'word'] as const).map((fmt) => (
-              <label
-                key={fmt}
-                className="flex items-center gap-3 p-2.5 bg-x-darker/50 rounded-lg cursor-pointer hover:bg-x-darker/80 transition-colors"
-              >
-                <input
-                  type="checkbox"
-                  checked={outputFormats[fmt]}
-                  onChange={(e) =>
-                    setOutputFormats({ ...outputFormats, [fmt]: e.target.checked })
-                  }
-                  className="w-3.5 h-3.5 accent-x-blue rounded"
-                />
-                <span className="text-sm text-x-light capitalize">
-                  {fmt === 'word' ? 'Word Document' : fmt.charAt(0).toUpperCase() + fmt.slice(1)}
-                </span>
-              </label>
-            ))}
-          </div>
-        </div>
 
         {/* Start */}
         <button

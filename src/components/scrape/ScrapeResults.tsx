@@ -1,18 +1,44 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { useScrapeStore, TweetData } from '../../stores/scrapeStore';
+import { invoke } from '@tauri-apps/api/core';
+import { useScrapeStore } from '../../stores/scrapeStore';
+import { useSettingsStore } from '../../stores/settingsStore';
+import { FileText, FileJson, FileType, Download, Loader2 } from 'lucide-react';
+import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, BorderStyle } from 'docx';
 
 type SortField = 'date' | 'likes' | 'retweets' | 'replies' | 'views';
 type SortDirection = 'asc' | 'desc';
+type ExportFormat = 'json' | 'markdown' | 'word';
 
 function ScrapeResults() {
   const { t } = useTranslation();
   const { tweets, reset } = useScrapeStore();
 
+  const { outputDir } = useSettingsStore();
+
   const [sortField, setSortField] = useState<SortField>('date');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [expandedTweetId, setExpandedTweetId] = useState<string | null>(null);
+  const [exportResults, setExportResults] = useState<{ format: string; path: string }[]>([]);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
+
+  // File naming & multi-format selection
+  const target = useScrapeStore((s) => s.scrapeConfig?.target || 'export');
+  const [filename, setFilename] = useState('');
+  const [selectedFormats, setSelectedFormats] = useState<Record<ExportFormat, boolean>>({
+    json: true,
+    markdown: false,
+    word: false,
+  });
+
+  // Initialize filename from target
+  useEffect(() => {
+    const now = new Date();
+    const dateStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    setFilename(`${target}_${dateStr}`);
+  }, [target]);
 
   // Calculate summary stats
   const stats = useMemo(() => {
@@ -90,10 +116,199 @@ function ScrapeResults() {
     }
   };
 
-  const handleExport = (format: 'json' | 'markdown' | 'word') => {
-    // TODO: Implement export functionality
-    console.log(`Exporting as ${format}`);
+  // Generate JSON content from tweets
+  const generateJson = useCallback(() => {
+    const data = {
+      source: 'twitter',
+      user: `@${target}`,
+      scraped_at: new Date().toISOString(),
+      total_tweets: tweets.length,
+      tweets: tweets.map((t) => ({
+        id: t.id,
+        text: t.text,
+        date: new Date(t.date).toISOString(),
+        date_str: t.date_str,
+        url: t.tweet_url,
+        has_media: t.media_urls.length > 0,
+        media_urls: t.media_urls,
+        has_article: t.has_article,
+        likes: t.likes,
+        retweets: t.retweets,
+        replies: t.replies,
+        views: t.views,
+      })),
+    };
+    return JSON.stringify(data, null, 2);
+  }, [tweets, target]);
+
+  // Generate Markdown content from tweets
+  const generateMarkdown = useCallback(() => {
+    const lines: string[] = [];
+    lines.push(`# @${target} - Tweet Archive\n`);
+    lines.push(`**Total:** ${tweets.length} tweets\n`);
+    lines.push(`**Date:** ${new Date().toLocaleDateString()}\n`);
+    lines.push('---\n');
+
+    tweets.forEach((t, i) => {
+      lines.push(`## Tweet #${i + 1}\n`);
+      lines.push(`**Date:** ${t.date_str}\n`);
+      if (t.text) lines.push(`\n${t.text}\n`);
+      if (t.media_urls.length > 0) lines.push(`\n**Media:** ${t.media_urls.length} file(s)\n`);
+      lines.push(`\n**Likes:** ${t.likes} | **RTs:** ${t.retweets} | **Replies:** ${t.replies} | **Views:** ${t.views}\n`);
+      lines.push(`\n[Tweet Link](${t.tweet_url})\n`);
+      lines.push('\n---\n');
+    });
+
+    return lines.join('\n');
+  }, [tweets, target]);
+
+  // Generate DOCX content from tweets (returns base64 string)
+  const generateDocx = useCallback(async (): Promise<string> => {
+    const children: Paragraph[] = [];
+
+    // Title
+    children.push(new Paragraph({
+      heading: HeadingLevel.HEADING_1,
+      children: [new TextRun({ text: `@${target} - Tweet Archive`, bold: true, size: 32 })],
+    }));
+
+    // Summary
+    children.push(new Paragraph({
+      children: [new TextRun({ text: `Total: ${tweets.length} tweets`, size: 22 })],
+      spacing: { after: 100 },
+    }));
+    children.push(new Paragraph({
+      children: [new TextRun({ text: `Date: ${new Date().toLocaleDateString()}`, size: 22 })],
+      spacing: { after: 200 },
+    }));
+
+    // Separator
+    children.push(new Paragraph({
+      border: { bottom: { style: BorderStyle.SINGLE, size: 1, color: '999999' } },
+      spacing: { after: 200 },
+      children: [],
+    }));
+
+    // Tweets
+    tweets.forEach((t, i) => {
+      children.push(new Paragraph({
+        heading: HeadingLevel.HEADING_2,
+        children: [new TextRun({ text: `Tweet #${i + 1}`, bold: true, size: 26 })],
+        spacing: { before: 300 },
+      }));
+
+      children.push(new Paragraph({
+        children: [new TextRun({ text: `Date: ${t.date_str}`, bold: true, size: 20, color: '666666' })],
+        spacing: { after: 100 },
+      }));
+
+      if (t.text) {
+        children.push(new Paragraph({
+          children: [new TextRun({ text: t.text, size: 22 })],
+          spacing: { after: 100 },
+        }));
+      }
+
+      if (t.media_urls.length > 0) {
+        children.push(new Paragraph({
+          children: [new TextRun({ text: `Media: ${t.media_urls.length} file(s)`, italics: true, size: 20, color: '888888' })],
+          spacing: { after: 50 },
+        }));
+      }
+
+      children.push(new Paragraph({
+        children: [
+          new TextRun({ text: `Likes: ${t.likes}  |  RTs: ${t.retweets}  |  Replies: ${t.replies}  |  Views: ${t.views}`, size: 20, color: '555555' }),
+        ],
+        spacing: { after: 50 },
+      }));
+
+      children.push(new Paragraph({
+        children: [new TextRun({ text: t.tweet_url, size: 18, color: '1d9bf0' })],
+        spacing: { after: 100 },
+      }));
+
+      // Separator between tweets
+      children.push(new Paragraph({
+        border: { bottom: { style: BorderStyle.SINGLE, size: 1, color: 'DDDDDD' } },
+        spacing: { after: 100 },
+        children: [],
+      }));
+    });
+
+    const doc = new Document({
+      sections: [{
+        properties: {},
+        children,
+      }],
+    });
+
+    const blob = await Packer.toBlob(doc);
+    const arrayBuffer = await blob.arrayBuffer();
+    const bytes = new Uint8Array(arrayBuffer);
+    let binary = '';
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary);
+  }, [tweets, target]);
+
+  const handleExportAll = useCallback(async () => {
+    const formats = (Object.entries(selectedFormats) as [ExportFormat, boolean][])
+      .filter(([, selected]) => selected)
+      .map(([fmt]) => fmt);
+
+    if (formats.length === 0) return;
+
+    setExportResults([]);
+    setExportError(null);
+    setIsExporting(true);
+
+    const results: { format: string; path: string }[] = [];
+
+    for (const fmt of formats) {
+      try {
+        if (fmt === 'word') {
+          // Binary format - use base64 command
+          const contentBase64 = await generateDocx();
+          const path = await invoke<string>('save_binary_export_file', {
+            filename: filename.trim() || `${target}_export`,
+            target,
+            format: 'docx',
+            contentBase64,
+            outputDir: outputDir || null,
+          });
+          results.push({ format: 'docx', path });
+        } else {
+          // Text formats
+          const content = fmt === 'json' ? generateJson() : generateMarkdown();
+          const formatCode = fmt === 'json' ? 'json' : 'md';
+
+          const path = await invoke<string>('save_export_file', {
+            filename: filename.trim() || `${target}_export`,
+            target,
+            format: formatCode,
+            content,
+            outputDir: outputDir || null,
+          });
+
+          results.push({ format: formatCode, path });
+        }
+      } catch (err) {
+        setExportError(typeof err === 'string' ? err : String(err));
+        break;
+      }
+    }
+
+    setExportResults(results);
+    setIsExporting(false);
+  }, [selectedFormats, target, filename, outputDir, generateJson, generateMarkdown, generateDocx]);
+
+  const toggleFormat = (fmt: ExportFormat) => {
+    setSelectedFormats((prev) => ({ ...prev, [fmt]: !prev[fmt] }));
   };
+
+  const anyFormatSelected = Object.values(selectedFormats).some(Boolean);
 
   const toggleExpand = (tweetId: string) => {
     setExpandedTweetId(expandedTweetId === tweetId ? null : tweetId);
@@ -125,27 +340,91 @@ function ScrapeResults() {
             </p>
           </div>
 
-          {/* Export buttons */}
-          <div className="flex gap-2">
-            <button
-              onClick={() => handleExport('json')}
-              className="px-4 py-2 bg-x-dark hover:bg-x-darker border border-x-border text-x-light rounded-lg transition-colors font-medium"
-            >
-              📄 JSON
-            </button>
-            <button
-              onClick={() => handleExport('markdown')}
-              className="px-4 py-2 bg-x-dark hover:bg-x-darker border border-x-border text-x-light rounded-lg transition-colors font-medium"
-            >
-              📝 Markdown
-            </button>
-            <button
-              onClick={() => handleExport('word')}
-              className="px-4 py-2 bg-x-dark hover:bg-x-darker border border-x-border text-x-light rounded-lg transition-colors font-medium"
-            >
-              📘 Word
-            </button>
+        </div>
+
+        {/* Export Panel */}
+        <div className="mb-6 bg-x-dark/60 border border-x-border/40 rounded-xl p-5 space-y-4">
+          {/* File name */}
+          <div>
+            <label className="block text-xs font-medium text-x-gray mb-1.5">
+              Name your file
+            </label>
+            <input
+              type="text"
+              value={filename}
+              onChange={(e) => setFilename(e.target.value)}
+              placeholder="my_scrape"
+              className="w-full bg-x-darker/80 border border-x-border/40 rounded-lg px-4 py-2.5 text-sm text-x-light placeholder-x-gray/50 focus:outline-none focus:border-x-blue transition-colors"
+            />
           </div>
+
+          {/* Format selection */}
+          <div>
+            <label className="block text-xs font-medium text-x-gray mb-2">
+              Export formats
+            </label>
+            <div className="flex gap-2">
+              {([
+                { key: 'json' as ExportFormat, label: 'JSON', icon: FileJson },
+                { key: 'markdown' as ExportFormat, label: 'Markdown', icon: FileText },
+                { key: 'word' as ExportFormat, label: 'Word', icon: FileType },
+              ]).map(({ key, label, icon: Icon }) => (
+                <button
+                  key={key}
+                  onClick={() => toggleFormat(key)}
+                  disabled={isExporting}
+                  className={`flex-1 py-2.5 px-4 rounded-lg text-sm font-medium transition-all flex items-center justify-center gap-2 ${
+                    selectedFormats[key]
+                      ? 'bg-x-blue text-white'
+                      : 'bg-x-darker/80 text-x-gray hover:text-x-light border border-x-border/40'
+                  } disabled:opacity-50 disabled:cursor-not-allowed`}
+                >
+                  <Icon size={16} />
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Export button */}
+          <button
+            onClick={handleExportAll}
+            disabled={!anyFormatSelected || isExporting}
+            className={`w-full py-3 px-5 rounded-lg text-sm font-semibold transition-all flex items-center justify-center gap-2 ${
+              anyFormatSelected && !isExporting
+                ? 'bg-x-blue hover:bg-x-blue/80 text-white'
+                : 'bg-x-border/30 text-x-gray cursor-not-allowed'
+            }`}
+          >
+            {isExporting ? (
+              <>
+                <Loader2 size={16} className="animate-spin" />
+                Exporting...
+              </>
+            ) : (
+              <>
+                <Download size={16} />
+                Export {Object.values(selectedFormats).filter(Boolean).length} format(s)
+              </>
+            )}
+          </button>
+
+          {/* Export results */}
+          {exportResults.length > 0 && (
+            <div className="space-y-2">
+              {exportResults.map((result, i) => (
+                <div key={i} className="p-3 bg-green-500/10 border border-green-500/30 rounded-lg text-sm text-green-400 flex items-center justify-between">
+                  <span>Exported {result.format.toUpperCase()} to: {result.path}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {exportError && (
+            <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg text-sm text-red-400 flex items-center justify-between">
+              <span>Export failed: {exportError}</span>
+              <button onClick={() => setExportError(null)} className="text-red-400 hover:text-red-300 ml-2">✕</button>
+            </div>
+          )}
         </div>
 
         {/* Summary stats */}

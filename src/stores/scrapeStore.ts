@@ -39,6 +39,7 @@ interface ScrapeState {
   currentScrapeId: string | null;
   error: string | null;
   scrapeConfig: ScrapeConfig | null;
+  lastCompletedAt: number;
 
   // Actions
   startScrape: (config: ScrapeConfig) => Promise<void>;
@@ -63,6 +64,7 @@ export const useScrapeStore = create<ScrapeState>((set, get) => ({
   currentScrapeId: null,
   error: null,
   scrapeConfig: null,
+  lastCompletedAt: 0,
 
   startScrape: async (config: ScrapeConfig) => {
     // Set UI state first
@@ -152,6 +154,7 @@ export const useScrapeStore = create<ScrapeState>((set, get) => ({
         collected: tweets.length > 0 ? tweets.length : get().tweets.length,
         target: tweets.length > 0 ? tweets.length : get().tweets.length,
       },
+      lastCompletedAt: Date.now(),
     });
   },
 

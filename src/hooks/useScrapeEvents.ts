@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { listen } from '@tauri-apps/api/event';
+import { invoke } from '@tauri-apps/api/core';
 import { useScrapeStore } from '../stores/scrapeStore';
 import { useAuthStore } from '../stores/authStore';
 
@@ -77,6 +78,16 @@ export function useScrapeEvents() {
         // Complete event is lightweight - tweets already updated via tweet-update events
         // Always call setComplete with empty array to trigger completion using store tweets
         setComplete([]);
+
+        // Save tweets to DB for history/dashboard persistence
+        const currentTweets = useScrapeStore.getState().tweets;
+        const scrapeId = useScrapeStore.getState().currentScrapeId;
+        if (scrapeId && currentTweets.length > 0) {
+          invoke('save_scrape_tweets', {
+            scrapeId,
+            tweets: currentTweets,
+          }).catch((err: unknown) => console.error('Failed to save tweets to DB:', err));
+        }
       });
       unlisteners.push(unlisten2);
 

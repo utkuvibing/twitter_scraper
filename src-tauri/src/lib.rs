@@ -40,6 +40,8 @@ pub fn run() {
             commands::license::validate_license,
             commands::license::get_license_status,
             commands::export::export_results,
+            commands::export::save_export_file,
+            commands::export::save_binary_export_file,
             commands::settings::get_settings,
             commands::settings::save_settings,
             commands::settings::load_settings,

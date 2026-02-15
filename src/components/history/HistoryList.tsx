@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
+import { useScrapeStore } from '../../stores/scrapeStore';
 
 interface ScrapeRecord {
   id: string;
@@ -15,6 +16,7 @@ interface ScrapeRecord {
 
 export default function HistoryList() {
   const { t } = useTranslation();
+  const lastCompletedAt = useScrapeStore((s) => s.lastCompletedAt);
   const [history, setHistory] = useState<ScrapeRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -40,7 +42,7 @@ export default function HistoryList() {
 
   useEffect(() => {
     loadHistory();
-  }, []);
+  }, [lastCompletedAt]);
 
   const filteredHistory = history.filter((item) =>
     item.target_username.toLowerCase().includes(searchQuery.toLowerCase())

@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { invoke } from '@tauri-apps/api/core';
+import { useScrapeStore } from '../../stores/scrapeStore';
 import {
   BarChart,
   Bar,
@@ -31,6 +32,7 @@ export default function AnalyticsDashboard({
   tweets: propTweets,
 }: AnalyticsDashboardProps) {
   const { t } = useTranslation();
+  const lastCompletedAt = useScrapeStore((s) => s.lastCompletedAt);
   const [scrapeHistory, setScrapeHistory] = useState<ScrapeRecord[]>([]);
   const [selectedScrapeId, setSelectedScrapeId] = useState<string | null>(null);
   const [loadedTweets, setLoadedTweets] = useState<TweetData[]>([]);
@@ -60,7 +62,7 @@ export default function AnalyticsDashboard({
       }
     };
     loadHistory();
-  }, []);
+  }, [lastCompletedAt]);
 
   // Load tweets when scrape is selected
   useEffect(() => {

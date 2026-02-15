@@ -212,7 +212,7 @@ def create_json_document(
         tweet_data = {
             "id": tweet.id,
             "text": tweet.text,
-            "date": tweet.date.isoformat() if tweet.date else None,
+            "date": tweet.date.isoformat() if hasattr(tweet.date, 'isoformat') else str(tweet.date) if tweet.date else None,
             "date_str": tweet.date_str,
             "url": tweet.tweet_url,
             "has_media": len(tweet.media_urls) > 0,

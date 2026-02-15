@@ -1,17 +1,50 @@
+import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { invoke } from '@tauri-apps/api/core';
 import { Download, Clock, BarChart3, ArrowRight } from 'lucide-react';
+import { useScrapeStore } from '../../stores/scrapeStore';
+
+interface ScrapeRecord {
+  id: string;
+  target_username: string;
+  scrape_type: string;
+  mode: string;
+  started_at: string;
+  completed_at: string | null;
+  tweet_count: number;
+  status: string;
+}
 
 function Dashboard() {
   const { t } = useTranslation();
+  const lastCompletedAt = useScrapeStore((s) => s.lastCompletedAt);
+
+  const [history, setHistory] = useState<ScrapeRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    invoke<ScrapeRecord[]>('get_scrape_history')
+      .then((records) => setHistory(records))
+      .catch((err) => console.error('Failed to load scrape history:', err))
+      .finally(() => setLoading(false));
+  }, [lastCompletedAt]);
 
   const stats = {
-    totalScrapes: 0,
-    totalTweets: 0,
-    lastScrapeDate: null as string | null,
+    totalScrapes: history.length,
+    totalTweets: history.reduce((sum, r) => sum + r.tweet_count, 0),
+    lastScrapeDate: history.length > 0
+      ? new Date(history[0].started_at).toLocaleDateString()
+      : null,
   };
 
-  const recentScrapes: any[] = [];
+  const recentScrapes = history.slice(0, 5).map((r) => ({
+    id: r.id,
+    target: r.target_username,
+    date: new Date(r.started_at).toLocaleDateString(),
+    tweetCount: r.tweet_count,
+    status: r.status,
+  }));
 
   return (
     <div className="p-6 space-y-6 max-w-5xl">
@@ -34,7 +67,9 @@ function Dashboard() {
               <BarChart3 size={16} className="text-x-blue" />
             </div>
           </div>
-          <p className="text-2xl font-semibold text-x-light">{stats.totalScrapes}</p>
+          <p className="text-2xl font-semibold text-x-light">
+            {loading ? '...' : stats.totalScrapes}
+          </p>
         </div>
 
         <div className="bg-x-dark/60 border border-x-border/40 rounded-xl p-5">
@@ -46,7 +81,9 @@ function Dashboard() {
               <Download size={16} className="text-emerald-400" />
             </div>
           </div>
-          <p className="text-2xl font-semibold text-x-light">{stats.totalTweets}</p>
+          <p className="text-2xl font-semibold text-x-light">
+            {loading ? '...' : stats.totalTweets}
+          </p>
         </div>
 
         <div className="bg-x-dark/60 border border-x-border/40 rounded-xl p-5">
@@ -57,7 +94,7 @@ function Dashboard() {
             </div>
           </div>
           <p className="text-lg font-semibold text-x-light">
-            {stats.lastScrapeDate || 'Never'}
+            {loading ? '...' : (stats.lastScrapeDate || 'Never')}
           </p>
         </div>
       </div>
