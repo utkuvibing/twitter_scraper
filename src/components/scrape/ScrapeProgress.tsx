@@ -141,6 +141,26 @@ function ScrapeProgress() {
     }
   }, [status, navigate]);
 
+  // Safety net: if progress reached target but complete event never arrived, auto-complete
+  useEffect(() => {
+    if (
+      status === 'running' &&
+      progress.target &&
+      progress.target > 0 &&
+      progress.collected >= progress.target
+    ) {
+      console.log('[ScrapeProgress] Progress reached target, waiting for complete event...');
+      const timeout = setTimeout(() => {
+        const currentStatus = useScrapeStore.getState().status;
+        if (currentStatus === 'running') {
+          console.warn('[ScrapeProgress] Complete event not received after 15s, auto-completing...');
+          useScrapeStore.getState().setComplete([]);
+        }
+      }, 15000);
+      return () => clearTimeout(timeout);
+    }
+  }, [status, progress.collected, progress.target]);
+
   const formatTime = (ms: number) => {
     const seconds = Math.floor(ms / 1000);
     const minutes = Math.floor(seconds / 60);

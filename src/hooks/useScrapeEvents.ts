@@ -73,12 +73,10 @@ export function useScrapeEvents() {
       // Listen for scrape completion (lightweight - no tweets payload)
       const unlisten2 = await listen<any>('scrape-complete', (event) => {
         const data = event.payload;
-        console.log('[SCRAPE-COMPLETE EVENT]', data);
-        // Complete event may or may not include tweets
-        // If no tweets in payload, use existing store tweets (already updated via tweet-update events)
-        const tweets = data.tweets || [];
-        console.log(`[SCRAPE-COMPLETE] Received ${tweets.length} tweets in payload, calling setComplete`);
-        setComplete(tweets);
+        console.log('[SCRAPE-COMPLETE EVENT] received:', JSON.stringify(data).slice(0, 200));
+        // Complete event is lightweight - tweets already updated via tweet-update events
+        // Always call setComplete with empty array to trigger completion using store tweets
+        setComplete([]);
       });
       unlisteners.push(unlisten2);
 

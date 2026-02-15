@@ -102,6 +102,7 @@ class XScraper:
         self.chrome_path = chrome_path
         self.scroll_pause_min = scroll_pause_min or SCROLL_PAUSE_MIN
         self.scroll_pause_max = scroll_pause_max or SCROLL_PAUSE_MAX
+        self.target_username = None  # Set by navigate_to_profile
 
         # State management
         self._paused = False
@@ -340,6 +341,7 @@ class XScraper:
     def navigate_to_profile(self, target_username: str) -> bool:
         """Navigate to target profile"""
         try:
+            self.target_username = target_username.lower().strip().lstrip("@")
             url = X_PROFILE_URL.format(username=target_username)
             self._emit("log", level="info", message=f"Navigating to profile: {url}")
             self.driver.get(url)
@@ -350,7 +352,35 @@ class XScraper:
                     (By.XPATH, '//article[@data-testid="tweet"]')
                 )
             )
-            self._emit("log", level="info", message="Profile loaded")
+
+            # Wait for X to fully render the timeline
+            time.sleep(2)
+            articles = self.driver.find_elements(
+                By.XPATH, '//article[@data-testid="tweet"]'
+            )
+            self._emit(
+                "log",
+                level="info",
+                message=f"Profile loaded with {len(articles)} initial articles",
+            )
+
+            # If very few articles, wait longer for X to finish loading
+            if len(articles) < 5:
+                self._emit(
+                    "log",
+                    level="info",
+                    message="Few articles detected, waiting for more to load...",
+                )
+                time.sleep(3)
+                articles = self.driver.find_elements(
+                    By.XPATH, '//article[@data-testid="tweet"]'
+                )
+                self._emit(
+                    "log",
+                    level="info",
+                    message=f"After extra wait: {len(articles)} articles",
+                )
+
             return True
 
         except TimeoutException:
@@ -378,7 +408,17 @@ class XScraper:
                     (By.XPATH, '//article[@data-testid="tweet"]')
                 )
             )
-            self._emit("log", level="info", message="Bookmarks page loaded")
+
+            # Wait for X to fully render
+            time.sleep(2)
+            articles = self.driver.find_elements(
+                By.XPATH, '//article[@data-testid="tweet"]'
+            )
+            self._emit(
+                "log",
+                level="info",
+                message=f"Bookmarks page loaded with {len(articles)} initial articles",
+            )
             return True
 
         except TimeoutException:
@@ -473,7 +513,7 @@ class XScraper:
             Tweet object, None (skip), or SKIP_ALREADY_COLLECTED
         """
         try:
-            # Pinned / Reply check
+            # Retweet / Reply check via socialContext
             try:
                 social_context = article.find_element(
                     By.CSS_SELECTOR, '[data-testid="socialContext"]'
@@ -483,7 +523,14 @@ class XScraper:
                     self._emit(
                         "log",
                         level="debug",
-                        message=f"[FILTER] Skipping reply tweet (socialContext: {context_text[:50]})",
+                        message=f"[FILTER] Skipping reply (socialContext: {context_text[:50]})",
+                    )
+                    return None
+                if "reposted" in context_text or "retweeted" in context_text:
+                    self._emit(
+                        "log",
+                        level="debug",
+                        message=f"[FILTER] Skipping retweet (socialContext: {context_text[:50]})",
                     )
                     return None
             except NoSuchElementException:
@@ -520,6 +567,24 @@ class XScraper:
                     message="[FILTER] Skipping article: no tweet ID found",
                 )
                 return None
+
+            # Check if tweet belongs to target user (skip retweets/others' tweets)
+            if self.target_username and tweet_url and "/status/" in tweet_url:
+                try:
+                    url_lower = tweet_url.lower()
+                    # Extract username from tweet URL: https://x.com/USERNAME/status/...
+                    before_status = url_lower.split("/status/")[0]
+                    url_parts = before_status.rstrip("/").split("/")
+                    tweet_author = url_parts[-1] if url_parts else None
+                    if tweet_author and tweet_author != self.target_username:
+                        self._emit(
+                            "log",
+                            level="debug",
+                            message=f"[FILTER] Skipping other user's tweet (@{tweet_author}, expected @{self.target_username})",
+                        )
+                        return None
+                except Exception:
+                    pass  # If URL parsing fails, don't filter
 
             # Already collected check
             if tweet_id in self.collected_tweet_ids:
@@ -969,6 +1034,34 @@ class XScraper:
             except:
                 pass
 
+    def _scroll_recovery(self):
+        """Recovery when scroll gets stuck: scroll to top, wait, then gradually scroll down"""
+        try:
+            # Scroll to top
+            self.driver.execute_script("window.scrollTo(0, 0);")
+            time.sleep(2)
+
+            # Gradually scroll down to trigger X's lazy loading
+            for i in range(5):
+                self.driver.execute_script("window.scrollBy(0, 600);")
+                time.sleep(0.8)
+
+            # Final wait for content to load
+            time.sleep(2)
+
+            articles = self.driver.find_elements(By.XPATH, XPATHS["tweet_article"])
+            self._emit(
+                "log",
+                level="info",
+                message=f"Recovery complete: {len(articles)} articles in DOM",
+            )
+        except Exception as e:
+            self._emit(
+                "log",
+                level="warning",
+                message=f"Recovery scroll error: {str(e)[:80]}",
+            )
+
     def _scroll_down(self):
         """Scroll page down and wait for new content"""
         import time as time_module
@@ -990,7 +1083,9 @@ class XScraper:
                     link = time_el.find_element(By.XPATH, "./ancestor::a")
                     href = link.get_attribute("href")
                     if href and "/status/" in href:
-                        old_ids.add(href.split("/status/")[-1].split("?")[0].split("/")[0])
+                        sid = href.split("/status/")[-1].split("?")[0].split("/")[0]
+                        if sid:
+                            old_ids.add(sid)
                 except:
                     pass
         except Exception as e:
@@ -1061,7 +1156,9 @@ class XScraper:
                         link = time_el.find_element(By.XPATH, "./ancestor::a")
                         href = link.get_attribute("href")
                         if href and "/status/" in href:
-                            new_ids.add(href.split("/status/")[-1].split("?")[0].split("/")[0])
+                            sid = href.split("/status/")[-1].split("?")[0].split("/")[0]
+                            if sid:
+                                new_ids.add(sid)
                     except:
                         pass
 
@@ -1194,6 +1291,15 @@ class XScraper:
                         message=f"End of timeline reached. Found {collected_after} of {count} requested tweets.",
                     )
                     break
+
+                # Recovery: if stuck for 3+ loops, scroll to top and back down
+                if no_new_tweets_count == 3:
+                    self._emit(
+                        "log",
+                        level="info",
+                        message="Scroll stuck, trying recovery: scroll to top then back down...",
+                    )
+                    self._scroll_recovery()
 
                 self._emit(
                     "log",

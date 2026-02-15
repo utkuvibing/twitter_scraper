@@ -175,10 +175,22 @@ class ScraperService:
                     level="info",
                     message=f"SCRAPE COMPLETE: Sending {len(tweets)} updated tweets...",
                 )
-                for tweet in tweets:
-                    self.emit("tweet_update", tweet=tweet.to_dict())
+                for i, tweet in enumerate(tweets):
+                    try:
+                        self.emit("tweet_update", tweet=tweet.to_dict())
+                    except Exception as e:
+                        self.emit(
+                            "log",
+                            level="warning",
+                            message=f"Failed to send tweet_update {i+1}/{len(tweets)}: {str(e)[:80]}",
+                        )
 
                 # Emit lightweight complete event (no tweets payload)
+                self.emit(
+                    "log",
+                    level="info",
+                    message="SCRAPE COMPLETE: Sending complete event...",
+                )
                 self.emit(
                     "complete",
                     total=len(tweets),
