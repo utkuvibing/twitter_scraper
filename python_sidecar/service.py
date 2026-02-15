@@ -169,28 +169,8 @@ class ScraperService:
                 )
                 self.current_tweets = tweets
 
-                # Send updated tweets individually (full text may be large)
-                self.emit(
-                    "log",
-                    level="info",
-                    message=f"SCRAPE COMPLETE: Sending {len(tweets)} updated tweets...",
-                )
-                for i, tweet in enumerate(tweets):
-                    try:
-                        self.emit("tweet_update", tweet=tweet.to_dict())
-                    except Exception as e:
-                        self.emit(
-                            "log",
-                            level="warning",
-                            message=f"Failed to send tweet_update {i+1}/{len(tweets)}: {str(e)[:80]}",
-                        )
-
-                # Emit lightweight complete event (no tweets payload)
-                self.emit(
-                    "log",
-                    level="info",
-                    message="SCRAPE COMPLETE: Sending complete event...",
-                )
+                # Send complete event FIRST (lightweight, won't block pipe)
+                # Tweet updates are large and can block stdout pipe via IPC backpressure
                 self.emit(
                     "complete",
                     total=len(tweets),
@@ -201,8 +181,19 @@ class ScraperService:
                 self.emit(
                     "log",
                     level="info",
-                    message="SCRAPE COMPLETE: Event sent successfully",
+                    message=f"SCRAPE COMPLETE: {len(tweets)} tweets. Sending full text updates...",
                 )
+
+                # Now send updated tweets (full text/articles) - arrives after UI transitions
+                for i, tweet in enumerate(tweets):
+                    try:
+                        self.emit("tweet_update", tweet=tweet.to_dict())
+                    except Exception as e:
+                        self.emit(
+                            "log",
+                            level="warning",
+                            message=f"Failed to send tweet_update {i+1}/{len(tweets)}: {str(e)[:80]}",
+                        )
 
             except KeyboardInterrupt:
                 tweets = self.scraper.tweets_collected if self.scraper else []
@@ -210,8 +201,6 @@ class ScraperService:
                     key=lambda t: t.date if t.date else datetime.min, reverse=True
                 )
                 self.current_tweets = tweets
-                for tweet in tweets:
-                    self.emit("tweet_update", tweet=tweet.to_dict())
                 self.emit(
                     "complete",
                     total=len(tweets),
@@ -220,6 +209,11 @@ class ScraperService:
                     scrape_type=cmd.get("type", "profile"),
                     partial=True,
                 )
+                for tweet in tweets:
+                    try:
+                        self.emit("tweet_update", tweet=tweet.to_dict())
+                    except Exception:
+                        pass
             except Exception as e:
                 self.emit("error", message=f"Scrape error: {e}")
                 traceback.print_exc(file=sys.stderr)
