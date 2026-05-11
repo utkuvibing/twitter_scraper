@@ -62,8 +62,8 @@ pub async fn save_export_file(
         _ => ".txt",
     };
 
-    // Build filename with extension
-    let mut fname = filename;
+    // Build safe filename with extension
+    let mut fname = safe_filename(&filename);
     if !fname.ends_with(ext) {
         fname.push_str(ext);
     }
@@ -77,7 +77,7 @@ pub async fn save_export_file(
     };
 
     // Create user subdirectory
-    let user_dir = base_dir.join(&target);
+    let user_dir = base_dir.join(safe_path_segment(&target, "export"));
     std::fs::create_dir_all(&user_dir)
         .map_err(|e| format!("Failed to create directory: {}", e))?;
 
@@ -104,7 +104,7 @@ pub async fn save_binary_export_file(
         _ => ".bin",
     };
 
-    let mut fname = filename;
+    let mut fname = safe_filename(&filename);
     if !fname.ends_with(ext) {
         fname.push_str(ext);
     }
@@ -116,7 +116,7 @@ pub async fn save_binary_export_file(
         default_output_dir()
     };
 
-    let user_dir = base_dir.join(&target);
+    let user_dir = base_dir.join(safe_path_segment(&target, "export"));
     std::fs::create_dir_all(&user_dir)
         .map_err(|e| format!("Failed to create directory: {}", e))?;
 
@@ -140,4 +140,57 @@ fn default_output_dir() -> PathBuf {
         }
     }
     PathBuf::from("output")
+}
+
+fn safe_filename(filename: &str) -> String {
+    let name = PathBuf::from(filename)
+        .file_name()
+        .and_then(|v| v.to_str())
+        .unwrap_or("export")
+        .to_string();
+
+    let stem = PathBuf::from(&name)
+        .file_stem()
+        .and_then(|v| v.to_str())
+        .unwrap_or("export");
+
+    safe_path_segment(stem, "export")
+}
+
+fn safe_path_segment(value: &str, default: &str) -> String {
+    let mut cleaned = String::new();
+    for ch in value.trim().trim_start_matches('@').chars() {
+        let is_forbidden = matches!(
+            ch,
+            '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*'
+        ) || ch.is_control();
+
+        if is_forbidden || ch.is_whitespace() {
+            cleaned.push('_');
+        } else {
+            cleaned.push(ch);
+        }
+    }
+
+    let cleaned = cleaned.trim_matches(|c| c == ' ' || c == '.' || c == '_' || c == '@');
+    let mut result = if cleaned.is_empty() {
+        default.to_string()
+    } else {
+        cleaned.to_string()
+    };
+
+    let upper = result.to_ascii_uppercase();
+    let reserved = upper == "CON"
+        || upper == "PRN"
+        || upper == "AUX"
+        || upper == "NUL"
+        || (upper.len() == 4
+            && (upper.starts_with("COM") || upper.starts_with("LPT"))
+            && upper[3..].chars().all(|c| ('1'..='9').contains(&c)));
+
+    if reserved {
+        result.insert(0, '_');
+    }
+
+    result.chars().take(120).collect()
 }

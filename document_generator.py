@@ -3,14 +3,26 @@ Document Generator - Tweetleri çeşitli formatlarda kaydet
 Desteklenen formatlar: .docx, .json, .md
 """
 
-import json
+import logging
 import os
 from typing import List, Optional
 from datetime import datetime
 from docx import Document
 from docx.shared import Pt, Inches, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.enum.style import WD_STYLE_TYPE
+
+from export_schema import (
+    EXPORT_SCHEMA_VERSION,
+    atomic_save_docx,
+    atomic_write_json,
+    atomic_write_text,
+    build_export_payload,
+    normalize_tweet,
+    resolve_output_path,
+)
+
+
+logger = logging.getLogger(__name__)
 
 
 # Base output dizini
@@ -31,20 +43,14 @@ def get_output_path(
     Returns:
         Tam dosya yolu
     """
-    # Eğer özel output dizini verildiyse onu kullan, yoksa default
-    if output_dir and os.path.isdir(output_dir):
-        base_dir = output_dir
-    else:
-        base_dir = BASE_OUTPUT_DIR
-
-    # Kullanıcıya özel klasör oluştur
-    user_output_dir = os.path.join(base_dir, target_username)
-    os.makedirs(user_output_dir, exist_ok=True)
-
-    # Sadece dosya adını al (path içeriyorsa)
-    filename = os.path.basename(filename)
-
-    return os.path.join(user_output_dir, filename)
+    _, ext = os.path.splitext(filename)
+    return resolve_output_path(
+        target_username=target_username,
+        filename=filename,
+        extension=ext or ".json",
+        base_output_dir=BASE_OUTPUT_DIR,
+        output_dir=output_dir,
+    )
 
 
 def create_word_document(
@@ -137,8 +143,11 @@ def create_word_document(
         output_path += ".docx"
 
     # Kullanıcıya özel output klasörüne kaydet (seçilen dizini kullan)
-    full_path = get_output_path(target_username, output_path, output_dir)
-    doc.save(full_path)
+    full_path = resolve_output_path(
+        target_username, output_path, ".docx", BASE_OUTPUT_DIR, output_dir
+    )
+    atomic_save_docx(doc, full_path)
+    logger.info("Word document saved: %s", full_path)
     print(f"Document kaydedildi: {full_path}")
 
     return full_path
@@ -177,8 +186,10 @@ def create_simple_document(
     if not output_path.endswith(".docx"):
         output_path += ".docx"
 
-    full_path = get_output_path(target_username, output_path, output_dir)
-    doc.save(full_path)
+    full_path = resolve_output_path(
+        target_username, output_path, ".docx", BASE_OUTPUT_DIR, output_dir
+    )
+    atomic_save_docx(doc, full_path)
     return full_path
 
 
@@ -200,34 +211,13 @@ def create_json_document(
     Returns:
         Dosya yolu
     """
-    data = {
-        "source": "twitter",
-        "user": f"@{target_username}",
-        "scraped_at": datetime.now().isoformat(),
-        "total_tweets": len(tweets),
-        "tweets": [],
-    }
+    data = build_export_payload(tweets, target_username)
 
-    for tweet in tweets:
-        tweet_data = {
-            "id": tweet.id,
-            "text": tweet.text,
-            "date": tweet.date.isoformat() if hasattr(tweet.date, 'isoformat') else str(tweet.date) if tweet.date else None,
-            "date_str": tweet.date_str,
-            "url": tweet.tweet_url,
-            "has_media": len(tweet.media_urls) > 0,
-            "media_urls": tweet.media_urls,
-            "has_article": getattr(tweet, "has_article", False),
-        }
-        data["tweets"].append(tweet_data)
-
-    if not output_path.endswith(".json"):
-        output_path += ".json"
-
-    full_path = get_output_path(target_username, output_path, output_dir)
-    with open(full_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
+    full_path = resolve_output_path(
+        target_username, output_path, ".json", BASE_OUTPUT_DIR, output_dir
+    )
+    atomic_write_json(full_path, data)
+    logger.info("JSON export saved: %s", full_path)
     print(f"JSON kaydedildi: {full_path}")
     return full_path
 
@@ -251,27 +241,29 @@ def create_markdown_document(
         Dosya yolu
     """
     lines = []
+    normalized_tweets = [normalize_tweet(tweet) for tweet in tweets]
+
     lines.append(f"# @{target_username} - Tweet Arşivi\n")
+    lines.append(f"**Schema:** {EXPORT_SCHEMA_VERSION}\n")
     lines.append(f"**Toplam:** {len(tweets)} tweet\n")
     lines.append(f"**Tarih:** {datetime.now().strftime('%d.%m.%Y %H:%M')}\n")
     lines.append("---\n")
 
-    for i, tweet in enumerate(tweets, 1):
+    for i, tweet in enumerate(normalized_tweets, 1):
         lines.append(f"## Tweet #{i}\n")
-        lines.append(f"**Tarih:** {tweet.date_str}\n")
-        if tweet.text:
-            lines.append(f"\n{tweet.text}\n")
-        if tweet.media_urls:
-            lines.append(f"\n**Medya:** {len(tweet.media_urls)} adet\n")
-        lines.append(f"\n[Tweet Link]({tweet.tweet_url})\n")
+        lines.append(f"**Tarih:** {tweet['date_str']}\n")
+        if tweet["text"]:
+            lines.append(f"\n{tweet['text']}\n")
+        if tweet["media_urls"]:
+            lines.append(f"\n**Medya:** {len(tweet['media_urls'])} adet\n")
+        lines.append(f"\n[Tweet Link]({tweet['tweet_url']})\n")
         lines.append("\n---\n")
 
-    if not output_path.endswith(".md"):
-        output_path += ".md"
+    full_path = resolve_output_path(
+        target_username, output_path, ".md", BASE_OUTPUT_DIR, output_dir
+    )
+    atomic_write_text(full_path, "\n".join(lines))
 
-    full_path = get_output_path(target_username, output_path, output_dir)
-    with open(full_path, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines))
-
+    logger.info("Markdown export saved: %s", full_path)
     print(f"Markdown kaydedildi: {full_path}")
     return full_path

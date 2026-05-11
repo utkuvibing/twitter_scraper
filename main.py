@@ -420,10 +420,19 @@ def main():
         # Hata durumunda da kaydetmeyi dene
         if tweets and config:
             print(f"\nHataya rağmen {len(tweets)} tweet kaydediliyor...")
-            output_file = config["output_file"].replace(".docx", "_ERROR.docx")
+            output_format = config.get("output_format", "json")
+            base_name = config["output_file"].rsplit(".", 1)[0]
             try:
-                create_word_document(tweets, output_file, config["target_username"])
-                print(f"Kaydedildi: {output_file}")
+                if output_format == "json":
+                    output_file = f"{base_name}_ERROR.json"
+                    output_path = create_json_document(tweets, output_file, config["target_username"])
+                elif output_format == "md":
+                    output_file = f"{base_name}_ERROR.md"
+                    output_path = create_markdown_document(tweets, output_file, config["target_username"])
+                else:
+                    output_file = f"{base_name}_ERROR.docx"
+                    output_path = create_word_document(tweets, output_file, config["target_username"])
+                print(f"Kaydedildi: {output_path}")
             except:
                 pass
 
