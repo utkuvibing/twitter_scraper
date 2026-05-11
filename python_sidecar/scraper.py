@@ -41,6 +41,12 @@ from config import (
     USER_AGENT,
     XPATHS,
 )
+from diagnostics import (
+    ScrapeRunLog,
+    add_diagnostics_to_log,
+    record_event,
+    run_selector_diagnostics,
+)
 
 from session_manager import SessionManager
 
@@ -94,6 +100,7 @@ class XScraper:
         chrome_path: Optional[str] = None,
         scroll_pause_min: Optional[float] = None,
         scroll_pause_max: Optional[float] = None,
+        run_log: Optional[ScrapeRunLog] = None,
     ):
         self.driver = None
         self.headless = headless
@@ -104,6 +111,7 @@ class XScraper:
         self.scroll_pause_max = scroll_pause_max or SCROLL_PAUSE_MAX
         self.target_username = None  # Set by navigate_to_profile
         self._skipped_tweet_ids = set()  # Track filtered/promo tweets to avoid re-parsing
+        self.run_log = run_log
 
         # State management
         self._paused = False
@@ -186,12 +194,21 @@ class XScraper:
         """Start the driver"""
         if not self.driver:
             self._setup_driver()
+            record_event(self.run_log, "browser_start", "info", "Chrome WebDriver started")
 
     def stop(self):
         """Stop the driver"""
         if self.driver:
             self.driver.quit()
             self.driver = None
+            record_event(self.run_log, "browser_stop", "info", "Chrome WebDriver stopped")
+
+    def run_selector_diagnostics(self):
+        """Run configured selector checks on the current browser page."""
+        diagnostics = run_selector_diagnostics(self.driver)
+        add_diagnostics_to_log(self.run_log, diagnostics)
+        self._emit("selector_diagnostics", **diagnostics)
+        return diagnostics
 
     def login(self, username: str, password: str) -> bool:
         """
@@ -206,6 +223,7 @@ class XScraper:
         """
         try:
             self._emit("log", level="info", message="Logging in to X...")
+            record_event(self.run_log, "login", "info", "Automatic login started")
             self.driver.get(X_LOGIN_URL)
 
             wait = WebDriverWait(self.driver, 20)
@@ -274,6 +292,7 @@ class XScraper:
                 )
                 self.session_manager.save_cookies(self.driver)
                 self._emit("login_status", success=True, message="Login successful")
+                record_event(self.run_log, "login", "info", "Automatic login completed")
                 return True
             except TimeoutException:
                 self._emit(
@@ -281,10 +300,23 @@ class XScraper:
                     success=True,
                     message="Login check passed, continuing...",
                 )
+                record_event(
+                    self.run_log,
+                    "login",
+                    "warning",
+                    "Login success could not be confirmed by URL; continuing",
+                )
                 return True
 
         except Exception as e:
             self._emit("login_status", success=False, message=f"Login error: {e}")
+            record_event(
+                self.run_log,
+                "login",
+                "error",
+                f"Login failed: {e}",
+                reason="login_failed",
+            )
             return False
 
     def manual_login(self) -> bool:
@@ -296,6 +328,7 @@ class XScraper:
             True if successful
         """
         try:
+            record_event(self.run_log, "manual_login", "info", "Manual login started")
             self._emit(
                 "login_waiting",
                 message="Browser opened. Please login to your X account.",
@@ -316,16 +349,36 @@ class XScraper:
                         self._emit(
                             "login_status", success=True, message="Login successful"
                         )
+                        record_event(
+                            self.run_log,
+                            "manual_login",
+                            "info",
+                            "Manual login completed",
+                        )
                         return True
                 except:
                     continue
 
             self._emit("login_status", success=False, message="Login timed out")
+            record_event(
+                self.run_log,
+                "manual_login",
+                "error",
+                "Manual login timed out",
+                reason="manual_login_timeout",
+            )
             return False
 
         except Exception as e:
             self._emit(
                 "login_status", success=False, message=f"Manual login error: {e}"
+            )
+            record_event(
+                self.run_log,
+                "manual_login",
+                "error",
+                f"Manual login failed: {e}",
+                reason="manual_login_timeout",
             )
             return False
 
@@ -345,6 +398,13 @@ class XScraper:
             self.target_username = target_username.lower().strip().lstrip("@")
             url = X_PROFILE_URL.format(username=target_username)
             self._emit("log", level="info", message=f"Navigating to profile: {url}")
+            record_event(
+                self.run_log,
+                "profile_navigation",
+                "info",
+                f"Navigating to profile @{target_username}",
+                url=url,
+            )
             self.driver.get(url)
 
             wait = WebDriverWait(self.driver, 15)
@@ -382,15 +442,38 @@ class XScraper:
                     message=f"After extra wait: {len(articles)} articles",
                 )
 
+            diagnostics = self.run_selector_diagnostics()
+            record_event(
+                self.run_log,
+                "timeline_loading",
+                "info" if diagnostics.get("ok") else "warning",
+                "Profile timeline selector diagnostics completed",
+                missing_required=diagnostics.get("missing_required", []),
+            )
             return True
 
         except TimeoutException:
             self._emit(
                 "error", message="Profile could not be loaded or no tweets found"
             )
+            record_event(
+                self.run_log,
+                "profile_navigation",
+                "error",
+                "Profile page did not expose tweet articles before timeout",
+                reason="profile_navigation_failed",
+                selector=XPATHS["tweet_article"],
+            )
             return False
         except Exception as e:
             self._emit("error", message=f"Profile navigation error: {e}")
+            record_event(
+                self.run_log,
+                "profile_navigation",
+                "error",
+                f"Profile navigation error: {e}",
+                reason="profile_navigation_failed",
+            )
             return False
 
     def navigate_to_bookmarks(self) -> bool:
@@ -400,6 +483,13 @@ class XScraper:
                 "log",
                 level="info",
                 message=f"Navigating to bookmarks: {X_BOOKMARKS_URL}",
+            )
+            record_event(
+                self.run_log,
+                "bookmarks_navigation",
+                "info",
+                "Navigating to bookmarks",
+                url=X_BOOKMARKS_URL,
             )
             self.driver.get(X_BOOKMARKS_URL)
 
@@ -420,15 +510,38 @@ class XScraper:
                 level="info",
                 message=f"Bookmarks page loaded with {len(articles)} initial articles",
             )
+            diagnostics = self.run_selector_diagnostics()
+            record_event(
+                self.run_log,
+                "timeline_loading",
+                "info" if diagnostics.get("ok") else "warning",
+                "Bookmarks timeline selector diagnostics completed",
+                missing_required=diagnostics.get("missing_required", []),
+            )
             return True
 
         except TimeoutException:
             self._emit(
                 "error", message="Bookmarks could not be loaded or no bookmarks found"
             )
+            record_event(
+                self.run_log,
+                "bookmarks_navigation",
+                "error",
+                "Bookmarks page did not expose tweet articles before timeout",
+                reason="bookmarks_navigation_failed",
+                selector=XPATHS["tweet_article"],
+            )
             return False
         except Exception as e:
             self._emit("error", message=f"Bookmarks navigation error: {e}")
+            record_event(
+                self.run_log,
+                "bookmarks_navigation",
+                "error",
+                f"Bookmarks navigation error: {e}",
+                reason="bookmarks_navigation_failed",
+            )
             return False
 
     def _parse_engagement_metrics(self, article) -> dict:
@@ -567,6 +680,14 @@ class XScraper:
                     "log",
                     level="debug",
                     message="[FILTER] Skipping article: no tweet ID found",
+                )
+                record_event(
+                    self.run_log,
+                    "tweet_parsing",
+                    "warning",
+                    "Tweet article skipped because no status URL/id was found",
+                    reason="tweet_parse_failed",
+                    selector='a[href*="/status/"]',
                 )
                 return None
 
@@ -767,12 +888,25 @@ class XScraper:
                 level="debug",
                 message="[FILTER] Skipping article: stale element (DOM changed)",
             )
+            record_event(
+                self.run_log,
+                "tweet_parsing",
+                "debug",
+                "Tweet article became stale while parsing",
+            )
             return None
         except Exception as e:
             self._emit(
                 "log",
                 level="debug",
                 message=f"[FILTER] Skipping article: parse error: {str(e)[:80]}",
+            )
+            record_event(
+                self.run_log,
+                "tweet_parsing",
+                "warning",
+                f"Tweet parsing failed: {e}",
+                reason="tweet_parse_failed",
             )
             return None
 
@@ -877,6 +1011,14 @@ class XScraper:
 
         except Exception as e:
             self._emit("log", level="error", message=f"SHOW MORE ERROR: {str(e)[:100]}")
+            record_event(
+                self.run_log,
+                "full_text_extraction",
+                "warning",
+                f"Full text extraction failed: {e}",
+                reason="full_text_failed",
+                url=tweet_url,
+            )
         finally:
             self._emit(
                 "log", level="info", message="SHOW MORE: Closing tab and returning..."
@@ -897,6 +1039,15 @@ class XScraper:
                 message=f"SHOW MORE: Fetch took {elapsed:.1f}s (max {max_time}s)",
             )
 
+        if not text:
+            record_event(
+                self.run_log,
+                "full_text_extraction",
+                "warning",
+                "Full text extraction returned empty content",
+                reason="full_text_failed",
+                url=tweet_url,
+            )
         return text
 
     def _get_article_content(self, tweet_url: str) -> str:
@@ -1021,6 +1172,15 @@ class XScraper:
                 "log", level="info",
                 message=f"ARTICLE: Extracted {len(result)} chars from {len(content_parts)} paragraphs",
             )
+            if not result:
+                record_event(
+                    self.run_log,
+                    "article_extraction",
+                    "warning",
+                    "Article extraction returned empty content",
+                    reason="article_extraction_failed",
+                    url=tweet_url,
+                )
 
             elapsed = time.time() - start_time
             if elapsed > max_time:
@@ -1033,6 +1193,14 @@ class XScraper:
 
         except Exception as e:
             self._emit("log", level="error", message=f"ARTICLE ERROR: {str(e)[:100]}")
+            record_event(
+                self.run_log,
+                "article_extraction",
+                "warning",
+                f"Article extraction failed: {e}",
+                reason="article_extraction_failed",
+                url=tweet_url,
+            )
             return ""
         finally:
             self._close_extra_tabs(main_window)
@@ -1433,6 +1601,14 @@ class XScraper:
                         level="info",
                         message=f"End of timeline reached. Found {collected_after} of {count} requested tweets.",
                     )
+                    record_event(
+                        self.run_log,
+                        "timeline_loading",
+                        "warning",
+                        "Timeline stopped producing new parsed tweets",
+                        reason="timeline_empty" if not self.tweets_collected else None,
+                        collected=len(self.tweets_collected),
+                    )
                     break
 
                 # Recovery strategies at increasing desperation levels
@@ -1519,6 +1695,14 @@ class XScraper:
                         level="info",
                         message=f"End of timeline reached. Found {collected_after} of {count} requested tweets.",
                     )
+                    record_event(
+                        self.run_log,
+                        "timeline_loading",
+                        "warning",
+                        "Timeline stopped loading new tweet articles",
+                        reason="timeline_empty" if not self.tweets_collected else None,
+                        collected=len(self.tweets_collected),
+                    )
                     break
 
         except KeyboardInterrupt:
@@ -1537,6 +1721,14 @@ class XScraper:
             level="info",
             message=f"Total {len(self.tweets_collected)} tweets collected.",
         )
+        if not self.tweets_collected:
+            record_event(
+                self.run_log,
+                "timeline_loading",
+                "error",
+                "No tweets collected after count scrape",
+                reason="timeline_empty",
+            )
         return self.tweets_collected
 
     def _process_show_more_tweets(self):
@@ -1687,6 +1879,14 @@ class XScraper:
                         level="info",
                         message="No more tweets found or outside date range",
                     )
+                    record_event(
+                        self.run_log,
+                        "timeline_loading",
+                        "warning",
+                        "No more tweets found before date scrape completed",
+                        reason="timeline_empty" if not self.tweets_collected else None,
+                        collected=len(self.tweets_collected),
+                    )
                     break
 
                 if reached_start_date:
@@ -1708,6 +1908,14 @@ class XScraper:
             level="info",
             message=f"Total {len(self.tweets_collected)} tweets collected.",
         )
+        if not self.tweets_collected:
+            record_event(
+                self.run_log,
+                "timeline_loading",
+                "error",
+                "No tweets collected after date scrape",
+                reason="timeline_empty",
+            )
         return self.tweets_collected
 
     def scrape_last_n_days(self, days: int) -> List[Tweet]:
@@ -1774,6 +1982,14 @@ class XScraper:
 
                 if no_new_tweets_count >= max_no_new_tweets:
                     self._emit("log", level="info", message="No more bookmarks found")
+                    record_event(
+                        self.run_log,
+                        "timeline_loading",
+                        "warning",
+                        "No more bookmark tweets found",
+                        reason="timeline_empty" if not self.tweets_collected else None,
+                        collected=len(self.tweets_collected),
+                    )
                     break
 
                 self._scroll_down()
@@ -1792,4 +2008,12 @@ class XScraper:
             level="info",
             message=f"Total {len(self.tweets_collected)} bookmarks collected.",
         )
+        if not self.tweets_collected:
+            record_event(
+                self.run_log,
+                "timeline_loading",
+                "error",
+                "No bookmarks collected",
+                reason="timeline_empty",
+            )
         return self.tweets_collected

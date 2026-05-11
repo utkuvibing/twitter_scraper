@@ -13,6 +13,7 @@ Python/Selenium scraper for personal X/Twitter archiving, with an interactive CL
 - Pause, resume, cancel, and partial-result handling in supported flows
 - Versioned JSON export schema (`schema_version: "0.2"`)
 - Safer output handling with sanitized filenames and per-target output folders
+- Selector diagnostics and structured run logs (`schema_version: "0.3"`)
 
 ## Important Limits
 
@@ -45,6 +46,18 @@ The CLI prompts for:
 
 Exports are written under `output/<target>/` by default.
 
+### Selector Diagnostics
+
+Run selector diagnostics without starting a scrape:
+
+```bash
+python main.py --diagnostics
+```
+
+The CLI opens Chrome, lets you navigate or log in, then checks the currently loaded page for core X selectors such as login fields, tweet articles, tweet text, status links, long-tweet controls, and article links. A diagnostics run writes a structured log under `output/diagnostics/logs/`.
+
+Diagnostics only reports what is detectable on the current page. It does not guarantee a full scrape will succeed, and it does not bypass login, rate limits, private content, or platform restrictions.
+
 ## Desktop Usage
 
 ```bash
@@ -53,6 +66,24 @@ npm run tauri dev
 ```
 
 The desktop app uses `python_sidecar/` for scraping and streams structured events to the React UI.
+
+## Run Logs
+
+Every CLI scrape and sidecar scrape writes a JSON run log under:
+
+```text
+output/<target>/logs/
+```
+
+Run logs include:
+
+- scrape stage (`login`, `profile_navigation`, `bookmarks_navigation`, `timeline_loading`, `tweet_parsing`, `full_text_extraction`, `article_extraction`, `export_saving`)
+- severity level
+- failure reason codes such as `login_failed`, `profile_navigation_failed`, `timeline_empty`, `tweet_parse_failed`, `full_text_failed`, `article_extraction_failed`, or `export_failed`
+- selector names where a selector was involved
+- timing and diagnostic details
+
+These logs are intended for debugging X DOM changes and incomplete runs. They do not contain credentials.
 
 ## JSON Export Schema
 
@@ -96,7 +127,7 @@ Run the local validation suite without opening a browser:
 
 ```bash
 python -m unittest discover -s tests
-python -m compileall main.py scraper.py document_generator.py export_schema.py python_sidecar
+python -m compileall main.py scraper.py document_generator.py export_schema.py diagnostics.py python_sidecar
 ```
 
 For the desktop frontend:
@@ -112,6 +143,7 @@ main.py                 Interactive Python CLI
 scraper.py              CLI Selenium scraper
 document_generator.py   JSON/Markdown/DOCX export writers
 export_schema.py        Shared export schema and safe write helpers
+diagnostics.py          Selector diagnostics and structured run logs
 python_sidecar/         JSON-line scraper service used by Tauri
 src/                    React frontend
 src-tauri/              Tauri/Rust backend

@@ -34,6 +34,12 @@ from config import (
     USER_AGENT,
     XPATHS,
 )
+from diagnostics import (
+    ScrapeRunLog,
+    add_diagnostics_to_log,
+    record_event,
+    run_selector_diagnostics,
+)
 
 
 SKIP_ALREADY_COLLECTED = "SKIP_ALREADY_COLLECTED"
@@ -55,7 +61,7 @@ class Tweet:
 class XScraper:
     """X (Twitter) Tweet Scraper"""
 
-    def __init__(self, headless: bool = False):
+    def __init__(self, headless: bool = False, run_log: Optional[ScrapeRunLog] = None):
         """
         Scraper'ı başlat
 
@@ -65,6 +71,7 @@ class XScraper:
         self.driver = None
         self.headless = headless
         self.collected_tweet_ids = set()
+        self.run_log = run_log
 
     def _setup_driver(self):
         """Chrome WebDriver'ı yapılandır ve başlat"""
@@ -104,12 +111,20 @@ class XScraper:
         """Driver'ı başlat"""
         if not self.driver:
             self._setup_driver()
+            record_event(self.run_log, "browser_start", "info", "Chrome WebDriver started")
 
     def stop(self):
         """Driver'ı kapat"""
         if self.driver:
             self.driver.quit()
             self.driver = None
+            record_event(self.run_log, "browser_stop", "info", "Chrome WebDriver stopped")
+
+    def run_selector_diagnostics(self):
+        """Run configured selector checks on the current browser page."""
+        diagnostics = run_selector_diagnostics(self.driver)
+        add_diagnostics_to_log(self.run_log, diagnostics)
+        return diagnostics
 
     def login(self, username: str, password: str) -> bool:
         """
@@ -124,6 +139,7 @@ class XScraper:
         """
         try:
             print("X'e giriş yapılıyor...")
+            record_event(self.run_log, "login", "info", "Automatic login started")
             self.driver.get(X_LOGIN_URL)
 
             # Username girişi (sayfa yüklenene kadar bekle)
@@ -180,13 +196,27 @@ class XScraper:
                               ("x.com" in d.current_url and "login" not in d.current_url and "flow" not in d.current_url)
                 )
                 print("Giriş başarılı!")
+                record_event(self.run_log, "login", "info", "Automatic login completed")
                 return True
             except TimeoutException:
                 print("Giriş kontrol ediliyor...")
+                record_event(
+                    self.run_log,
+                    "login",
+                    "warning",
+                    "Login success could not be confirmed by URL; continuing",
+                )
                 return True  # Devam etmeyi dene
 
         except Exception as e:
             print(f"Giriş hatası: {e}")
+            record_event(
+                self.run_log,
+                "login",
+                "error",
+                f"Login failed: {e}",
+                reason="login_failed",
+            )
             return False
 
     def manual_login(self) -> bool:
@@ -197,6 +227,7 @@ class XScraper:
             Başarılı ise True
         """
         try:
+            record_event(self.run_log, "manual_login", "info", "Manual login started")
             print("\n" + "=" * 50)
             print("MANUEL GİRİŞ MODU")
             print("=" * 50)
@@ -216,13 +247,27 @@ class XScraper:
             if "home" in current_url or "x.com" in current_url:
                 if "login" not in current_url and "flow" not in current_url:
                     print("Giriş başarılı!")
+                    record_event(self.run_log, "manual_login", "info", "Manual login confirmed")
                     return True
 
             print("Giriş yapılmış görünüyor, devam ediliyor...")
+            record_event(
+                self.run_log,
+                "manual_login",
+                "warning",
+                "Manual login confirmation was ambiguous; continuing",
+            )
             return True
 
         except Exception as e:
             print(f"Manuel giriş hatası: {e}")
+            record_event(
+                self.run_log,
+                "manual_login",
+                "error",
+                f"Manual login failed: {e}",
+                reason="manual_login_timeout",
+            )
             return False
 
     def _human_type(self, element, text: str):
@@ -244,6 +289,13 @@ class XScraper:
         try:
             url = X_PROFILE_URL.format(username=target_username)
             print(f"Profile gidiliyor: {url}")
+            record_event(
+                self.run_log,
+                "profile_navigation",
+                "info",
+                f"Navigating to profile @{target_username}",
+                url=url,
+            )
             self.driver.get(url)
 
             # Profil yüklendi mi kontrol et (tweet görünene kadar bekle)
@@ -252,13 +304,36 @@ class XScraper:
                 EC.presence_of_element_located((By.XPATH, '//article[@data-testid="tweet"]'))
             )
             print("Profil yüklendi!")
+            diagnostics = self.run_selector_diagnostics()
+            record_event(
+                self.run_log,
+                "timeline_loading",
+                "info" if diagnostics.get("ok") else "warning",
+                "Profile timeline selector diagnostics completed",
+                missing_required=diagnostics.get("missing_required", []),
+            )
             return True
 
         except TimeoutException:
             print("Profil yüklenemedi veya tweet bulunamadı.")
+            record_event(
+                self.run_log,
+                "profile_navigation",
+                "error",
+                "Profile page did not expose tweet articles before timeout",
+                reason="profile_navigation_failed",
+                selector=XPATHS["tweet_article"],
+            )
             return False
         except Exception as e:
             print(f"Profil navigasyon hatası: {e}")
+            record_event(
+                self.run_log,
+                "profile_navigation",
+                "error",
+                f"Profile navigation error: {e}",
+                reason="profile_navigation_failed",
+            )
             return False
 
     def navigate_to_bookmarks(self) -> bool:
@@ -270,6 +345,13 @@ class XScraper:
         """
         try:
             print(f"Bookmarks sayfasına gidiliyor: {X_BOOKMARKS_URL}")
+            record_event(
+                self.run_log,
+                "bookmarks_navigation",
+                "info",
+                "Navigating to bookmarks",
+                url=X_BOOKMARKS_URL,
+            )
             self.driver.get(X_BOOKMARKS_URL)
 
             # Bookmark sayfası yüklendi mi kontrol et
@@ -278,13 +360,36 @@ class XScraper:
                 EC.presence_of_element_located((By.XPATH, '//article[@data-testid="tweet"]'))
             )
             print("Bookmarks sayfası yüklendi!")
+            diagnostics = self.run_selector_diagnostics()
+            record_event(
+                self.run_log,
+                "timeline_loading",
+                "info" if diagnostics.get("ok") else "warning",
+                "Bookmarks timeline selector diagnostics completed",
+                missing_required=diagnostics.get("missing_required", []),
+            )
             return True
 
         except TimeoutException:
             print("Bookmarks yüklenemedi veya bookmark bulunamadı.")
+            record_event(
+                self.run_log,
+                "bookmarks_navigation",
+                "error",
+                "Bookmarks page did not expose tweet articles before timeout",
+                reason="bookmarks_navigation_failed",
+                selector=XPATHS["tweet_article"],
+            )
             return False
         except Exception as e:
             print(f"Bookmarks navigasyon hatası: {e}")
+            record_event(
+                self.run_log,
+                "bookmarks_navigation",
+                "error",
+                f"Bookmarks navigation error: {e}",
+                reason="bookmarks_navigation_failed",
+            )
             return False
 
     def _parse_tweet_element(self, article) -> Optional[Tweet]:
@@ -328,6 +433,14 @@ class XScraper:
                         break
 
             if not tweet_id:
+                record_event(
+                    self.run_log,
+                    "tweet_parsing",
+                    "warning",
+                    "Tweet article skipped because no status URL/id was found",
+                    reason="tweet_parse_failed",
+                    selector='a[href*="/status/"]',
+                )
                 return None
 
             # Zaten toplandıysa atla (ama "yeni tweet yok" sayma)
@@ -460,8 +573,21 @@ class XScraper:
             )
 
         except StaleElementReferenceException:
+            record_event(
+                self.run_log,
+                "tweet_parsing",
+                "debug",
+                "Tweet article became stale while parsing",
+            )
             return None
         except Exception as e:
+            record_event(
+                self.run_log,
+                "tweet_parsing",
+                "warning",
+                f"Tweet parsing failed: {e}",
+                reason="tweet_parse_failed",
+            )
             return None
 
     def _get_full_tweet_text(self, tweet_url: str) -> str:
@@ -510,6 +636,14 @@ class XScraper:
 
         except Exception as e:
             print(f"    [!] Hata: {str(e)[:30]}")
+            record_event(
+                self.run_log,
+                "full_text_extraction",
+                "warning",
+                f"Full text extraction failed: {e}",
+                reason="full_text_failed",
+                url=tweet_url,
+            )
         finally:
             # Yeni tab'ı kapat ve ana tab'a dön
             try:
@@ -519,6 +653,15 @@ class XScraper:
             except:
                 pass
 
+        if not text:
+            record_event(
+                self.run_log,
+                "full_text_extraction",
+                "warning",
+                "Full text extraction returned empty content",
+                reason="full_text_failed",
+                url=tweet_url,
+            )
         return text
 
     def _get_article_content(self, tweet_url: str) -> str:
@@ -584,10 +727,27 @@ class XScraper:
 
             result = "\n\n".join(content_parts)
             print(f"    ✓ Article: {len(result)} karakter")
+            if not result:
+                record_event(
+                    self.run_log,
+                    "article_extraction",
+                    "warning",
+                    "Article extraction returned empty content",
+                    reason="article_extraction_failed",
+                    url=tweet_url,
+                )
             return result
 
         except Exception as e:
             print(f"    [!] Article hata: {str(e)[:50]}")
+            record_event(
+                self.run_log,
+                "article_extraction",
+                "warning",
+                f"Article extraction failed: {e}",
+                reason="article_extraction_failed",
+                url=tweet_url,
+            )
             return ""
         finally:
             try:
@@ -685,6 +845,14 @@ class XScraper:
 
                 if stale_scroll_count >= max_stale_scrolls:
                     print("Sayfa sonuna ulaşıldı, daha fazla tweet yüklenmiyor.")
+                    record_event(
+                        self.run_log,
+                        "timeline_loading",
+                        "warning",
+                        "Timeline stopped loading new tweet articles",
+                        reason="timeline_empty" if not self.tweets_collected else None,
+                        collected=len(self.tweets_collected),
+                    )
                     break
 
         except KeyboardInterrupt:
@@ -695,6 +863,14 @@ class XScraper:
         self._process_show_more_tweets()
 
         print(f"Toplam {len(self.tweets_collected)} tweet toplandı.")
+        if not self.tweets_collected:
+            record_event(
+                self.run_log,
+                "timeline_loading",
+                "error",
+                "No tweets collected after count scrape",
+                reason="timeline_empty",
+            )
         return self.tweets_collected
 
     def _process_show_more_tweets(self):
@@ -794,6 +970,14 @@ class XScraper:
 
                 if no_new_tweets_count >= max_no_new_tweets:
                     print("Daha fazla tweet bulunamadı veya tarih aralığı dışına çıkıldı.")
+                    record_event(
+                        self.run_log,
+                        "timeline_loading",
+                        "warning",
+                        "No more tweets found before date scrape completed",
+                        reason="timeline_empty" if not self.tweets_collected else None,
+                        collected=len(self.tweets_collected),
+                    )
                     break
 
                 if reached_start_date:
@@ -809,6 +993,14 @@ class XScraper:
         self._process_show_more_tweets()
 
         print(f"Toplam {len(self.tweets_collected)} tweet toplandı.")
+        if not self.tweets_collected:
+            record_event(
+                self.run_log,
+                "timeline_loading",
+                "error",
+                "No tweets collected after date scrape",
+                reason="timeline_empty",
+            )
         return self.tweets_collected
 
     def scrape_last_n_days(self, days: int) -> List[Tweet]:
@@ -880,6 +1072,14 @@ class XScraper:
 
                 if no_new_tweets_count >= max_no_new_tweets:
                     print("Daha fazla bookmark bulunamadı.")
+                    record_event(
+                        self.run_log,
+                        "timeline_loading",
+                        "warning",
+                        "No more bookmark tweets found",
+                        reason="timeline_empty" if not self.tweets_collected else None,
+                        collected=len(self.tweets_collected),
+                    )
                     break
 
                 # Aşağı kaydır
@@ -893,4 +1093,12 @@ class XScraper:
         self._process_show_more_tweets()
 
         print(f"Toplam {len(self.tweets_collected)} bookmark toplandı.")
+        if not self.tweets_collected:
+            record_event(
+                self.run_log,
+                "timeline_loading",
+                "error",
+                "No bookmarks collected",
+                reason="timeline_empty",
+            )
         return self.tweets_collected
