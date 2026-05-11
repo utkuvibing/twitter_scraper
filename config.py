@@ -44,6 +44,65 @@ XPATHS = {
     "article_link": './/a[contains(@href, "/i/articles/")]',
 }
 
+CORE_SELECTOR_CHECKS = [
+    {
+        "name": "login_username_input",
+        "stage": "login",
+        "type": "xpath",
+        "selector": XPATHS["username_input"],
+        "required": False,
+    },
+    {
+        "name": "login_password_input",
+        "stage": "login",
+        "type": "xpath",
+        "selector": XPATHS["password_input"],
+        "required": False,
+    },
+    {
+        "name": "tweet_article",
+        "stage": "timeline_loading",
+        "type": "xpath",
+        "selector": XPATHS["tweet_article"],
+        "required": True,
+    },
+    {
+        "name": "tweet_text",
+        "stage": "tweet_parsing",
+        "type": "css",
+        "selector": SELECTORS["tweet_text"],
+        "required": False,
+    },
+    {
+        "name": "tweet_time",
+        "stage": "tweet_parsing",
+        "type": "css",
+        "selector": SELECTORS["tweet_time"],
+        "required": False,
+    },
+    {
+        "name": "tweet_status_link",
+        "stage": "tweet_parsing",
+        "type": "css",
+        "selector": SELECTORS["tweet_link"],
+        "required": False,
+    },
+    {
+        "name": "show_more_link",
+        "stage": "full_text_extraction",
+        "type": "css",
+        "selector": '[data-testid="tweet-text-show-more-link"]',
+        "required": False,
+    },
+    {
+        "name": "article_link",
+        "stage": "article_extraction",
+        "type": "xpath",
+        "selector": XPATHS["article_link"],
+        "required": False,
+    },
+]
+
 CHROME_OPTIONS = [
     "--disable-blink-features=AutomationControlled",
     "--disable-infobars",

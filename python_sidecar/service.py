@@ -21,10 +21,12 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from document_generator import (
+    BASE_OUTPUT_DIR,
     create_json_document,
     create_markdown_document,
     create_word_document,
 )
+from diagnostics import ScrapeRunLog, record_event, save_run_log
 
 
 class ScraperService:
@@ -34,6 +36,7 @@ class ScraperService:
         self.scraper: Optional[XScraper] = None
         self.current_scrape_id: Optional[str] = None
         self.current_tweets: list = []
+        self.current_run_log: Optional[ScrapeRunLog] = None
         self._scrape_thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
 
@@ -47,6 +50,20 @@ class ScraperService:
         except Exception as e:
             # Log serialization errors to stderr so they're visible
             print(f"[EMIT ERROR] type={msg_type}: {e}", file=sys.stderr, flush=True)
+
+    def save_current_run_log(self, status: str = "completed") -> Optional[str]:
+        """Save the active scrape run log and emit the saved path."""
+        if not self.current_run_log:
+            return None
+        self.current_run_log.mark_completed(status)
+        path = save_run_log(self.current_run_log, BASE_OUTPUT_DIR)
+        self.emit(
+            "run_log_saved",
+            path=path,
+            status=self.current_run_log.status,
+            failure_reason=self.current_run_log.failure_reason,
+        )
+        return path
 
     def read_command(self) -> Optional[dict]:
         """Read a JSON command from stdin"""
@@ -118,6 +135,13 @@ class ScraperService:
 
                 # Generate scrape ID
                 self.current_scrape_id = str(uuid.uuid4())[:8]
+                self.current_run_log = ScrapeRunLog(
+                    target=target or "bookmarks",
+                    scrape_type=scrape_type,
+                    mode=mode,
+                    run_id=self.current_scrape_id,
+                )
+                self.scraper.run_log = self.current_run_log
                 self.scraper.collected_tweet_ids = set()
                 self.scraper._cancelled = False
                 self.scraper._paused = False
@@ -126,14 +150,36 @@ class ScraperService:
                 # Navigate
                 if scrape_type == "bookmarks":
                     if not self.scraper.navigate_to_bookmarks():
-                        self.emit("error", message="Could not navigate to bookmarks")
+                        self.emit(
+                            "error",
+                            message="Could not navigate to bookmarks",
+                            code="bookmarks_navigation_failed",
+                        )
+                        self.save_current_run_log("failed")
                         return
                 else:
                     if not target:
-                        self.emit("error", message="Target username is required")
+                        record_event(
+                            self.current_run_log,
+                            "profile_navigation",
+                            "error",
+                            "Target username is required",
+                            reason="profile_navigation_failed",
+                        )
+                        self.emit(
+                            "error",
+                            message="Target username is required",
+                            code="profile_navigation_failed",
+                        )
+                        self.save_current_run_log("failed")
                         return
                     if not self.scraper.navigate_to_profile(target):
-                        self.emit("error", message=f"Could not navigate to @{target}")
+                        self.emit(
+                            "error",
+                            message=f"Could not navigate to @{target}",
+                            code="profile_navigation_failed",
+                        )
+                        self.save_current_run_log("failed")
                         return
 
                 # Scrape based on mode
@@ -168,6 +214,14 @@ class ScraperService:
                     key=lambda t: t.date if t.date else datetime.min, reverse=True
                 )
                 self.current_tweets = tweets
+                if not tweets:
+                    record_event(
+                        self.current_run_log,
+                        "timeline_loading",
+                        "error",
+                        "Scrape completed without collected tweets",
+                        reason="timeline_empty",
+                    )
 
                 # Send complete event FIRST (lightweight, won't block pipe)
                 # Tweet updates are large and can block stdout pipe via IPC backpressure
@@ -177,7 +231,11 @@ class ScraperService:
                     scrape_id=self.current_scrape_id,
                     target=target or "bookmarks",
                     scrape_type=scrape_type,
+                    failure_reason=self.current_run_log.failure_reason
+                    if self.current_run_log
+                    else None,
                 )
+                self.save_current_run_log("completed" if tweets else "failed")
                 self.emit(
                     "log",
                     level="info",
@@ -209,13 +267,22 @@ class ScraperService:
                     scrape_type=cmd.get("type", "profile"),
                     partial=True,
                 )
+                self.save_current_run_log("cancelled")
                 for tweet in tweets:
                     try:
                         self.emit("tweet_update", tweet=tweet.to_dict())
                     except Exception:
                         pass
             except Exception as e:
-                self.emit("error", message=f"Scrape error: {e}")
+                record_event(
+                    self.current_run_log,
+                    "unknown_error",
+                    "error",
+                    f"Scrape error: {e}",
+                    reason="unknown_error",
+                )
+                self.emit("error", message=f"Scrape error: {e}", code="unknown_error")
+                self.save_current_run_log("failed")
                 traceback.print_exc(file=sys.stderr)
 
         self._scrape_thread = threading.Thread(target=_do_scrape, daemon=True)
@@ -293,15 +360,40 @@ class ScraperService:
                 )
             else:
                 self.emit("log", level="error", message=f"EXPORT: Unknown format {fmt}")
-                self.emit("error", message=f"Unknown export format: {fmt}")
+                record_event(
+                    self.current_run_log,
+                    "export_saving",
+                    "error",
+                    f"Unknown export format: {fmt}",
+                    reason="export_failed",
+                )
+                self.emit("error", message=f"Unknown export format: {fmt}", code="export_failed")
+                self.save_current_run_log("failed")
                 return
 
+            record_event(
+                self.current_run_log,
+                "export_saving",
+                "info",
+                "Export saved",
+                path=path,
+                format=fmt,
+                total_tweets=len(self.current_tweets),
+            )
+            self.save_current_run_log("completed")
             self.emit("log", level="info", message=f"EXPORT: Success! Path={path}")
             self.emit(
                 "export_complete", format=fmt, path=path, message=f"Exported to {path}"
             )
         except Exception as e:
             self.emit("log", level="error", message=f"EXPORT ERROR: {str(e)}")
+            record_event(
+                self.current_run_log,
+                "export_saving",
+                "error",
+                f"Export error: {e}",
+                reason="export_failed",
+            )
             import traceback
 
             self.emit(
@@ -309,7 +401,35 @@ class ScraperService:
                 level="debug",
                 message=f"EXPORT TRACEBACK: {traceback.format_exc()}",
             )
-            self.emit("error", message=f"Export error: {e}")
+            self.emit("error", message=f"Export error: {e}", code="export_failed")
+            self.save_current_run_log("failed")
+
+    def handle_diagnostics(self):
+        """Run selector diagnostics on the current sidecar browser page."""
+        if not self.scraper or not self.scraper.driver:
+            self.emit(
+                "error",
+                message="Browser is not running. Login or start the sidecar first.",
+                code="diagnostics_browser_not_running",
+            )
+            return
+        self.current_run_log = ScrapeRunLog(
+            target="diagnostics",
+            scrape_type="diagnostics",
+            mode="selector_check",
+        )
+        self.scraper.run_log = self.current_run_log
+        diagnostics = self.scraper.run_selector_diagnostics()
+        if not diagnostics.get("ok"):
+            record_event(
+                self.current_run_log,
+                "selector_diagnostics",
+                "error",
+                "Required selector checks failed",
+                reason="timeline_empty",
+                missing_required=diagnostics.get("missing_required", []),
+            )
+        self.save_current_run_log("completed" if diagnostics.get("ok") else "failed")
 
     def handle_analyze(self, cmd: dict):
         """Handle analyze command"""
@@ -418,6 +538,8 @@ class ScraperService:
                     self.handle_login(cmd)
                 elif command == "scrape":
                     self.handle_scrape(cmd)
+                elif command == "diagnostics":
+                    self.handle_diagnostics()
                 elif command == "pause":
                     self.handle_pause()
                 elif command == "resume":

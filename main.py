@@ -8,7 +8,71 @@ import getpass
 from datetime import datetime, timedelta
 
 from scraper import XScraper
-from document_generator import create_word_document, create_json_document, create_markdown_document
+from document_generator import (
+    BASE_OUTPUT_DIR,
+    create_word_document,
+    create_json_document,
+    create_markdown_document,
+)
+from diagnostics import ScrapeRunLog, record_event, save_run_log
+
+
+def save_cli_run_log(run_log: ScrapeRunLog, status: str = "completed") -> str:
+    """Persist the CLI run log and print the path for the user."""
+    run_log.mark_completed(status)
+    path = save_run_log(run_log, BASE_OUTPUT_DIR)
+    print(f"Run log kaydedildi: {path}")
+    if run_log.failure_reason:
+        print(f"Failure reason: {run_log.failure_reason}")
+    return path
+
+
+def run_diagnostics_cli() -> int:
+    """Open a browser, navigate to a user-provided URL, and check selectors."""
+    run_log = ScrapeRunLog(target="diagnostics", scrape_type="diagnostics", mode="selector_check")
+    scraper = XScraper(headless=False, run_log=run_log)
+    try:
+        print("=" * 60)
+        print("   X Selector Diagnostics")
+        print("=" * 60)
+        print("Browser açılacak ve seçilen sayfadaki temel X selector'ları kontrol edilecek.")
+        url = input("Kontrol edilecek URL (boş: https://x.com/home): ").strip() or "https://x.com/home"
+
+        scraper.start()
+        scraper.driver.get(url)
+        input("Sayfa yüklendikten/giriş tamamlandıktan sonra ENTER'a basın...")
+        diagnostics = scraper.run_selector_diagnostics()
+
+        print("\nSelector diagnostics:")
+        for check in diagnostics["checks"]:
+            marker = "OK" if check["ok"] else "MISS"
+            print(f"  [{marker}] {check['name']} ({check['stage']}): {check['count']}")
+
+        status = "completed" if diagnostics["ok"] else "failed"
+        if not diagnostics["ok"]:
+            record_event(
+                run_log,
+                "selector_diagnostics",
+                "error",
+                "Required selector checks failed",
+                reason="timeline_empty",
+                missing_required=diagnostics["missing_required"],
+            )
+        save_cli_run_log(run_log, status)
+        return 0 if diagnostics["ok"] else 2
+    except Exception as e:
+        record_event(
+            run_log,
+            "selector_diagnostics",
+            "error",
+            f"Diagnostics failed: {e}",
+            reason="unknown_error",
+        )
+        save_cli_run_log(run_log, "failed")
+        print(f"Diagnostics hatası: {e}")
+        return 1
+    finally:
+        scraper.stop()
 
 
 def get_user_input():
@@ -246,13 +310,22 @@ def ask_continue():
 
 def main():
     """Ana uygulama"""
+    if "--diagnostics" in sys.argv:
+        return run_diagnostics_cli()
+
     scraper = None
     tweets = []
     config = None
+    run_log = None
 
     try:
         # İlk kullanıcı bilgilerini al (login dahil)
         config = get_user_input()
+        run_log = ScrapeRunLog(
+            target=config["target_username"],
+            scrape_type=config.get("scrape_type", "profile"),
+            mode=config["mode_config"].get("mode"),
+        )
 
         print("=" * 60)
         print("Scraping başlıyor...")
@@ -260,17 +333,33 @@ def main():
         print()
 
         # Scraper'ı başlat
-        scraper = XScraper(headless=False)  # Browser görünür olsun
+        scraper = XScraper(headless=False, run_log=run_log)  # Browser görünür olsun
 
         scraper.start()
 
         # Login (sadece bir kez)
         if config["manual_login"]:
             if not scraper.manual_login():
+                record_event(
+                    run_log,
+                    "manual_login",
+                    "error",
+                    "Manual login did not complete",
+                    reason="manual_login_timeout",
+                )
+                save_cli_run_log(run_log, "failed")
                 print("Giriş başarısız! Program sonlandırılıyor.")
                 return 1
         else:
             if not scraper.login(config["x_username"], config["x_password"]):
+                record_event(
+                    run_log,
+                    "login",
+                    "error",
+                    "Automatic login did not complete",
+                    reason="login_failed",
+                )
+                save_cli_run_log(run_log, "failed")
                 print("Giriş başarısız! Program sonlandırılıyor.")
                 return 1
 
@@ -280,6 +369,13 @@ def main():
             scrape_type = config.get("scrape_type", "profile")
             mode = config["mode_config"]
             tweets = []
+            if not run_log or run_log.status != "running":
+                run_log = ScrapeRunLog(
+                    target=config["target_username"],
+                    scrape_type=scrape_type,
+                    mode=mode.get("mode"),
+                )
+                scraper.run_log = run_log
 
             # Önceki toplamları temizle
             scraper.collected_tweet_ids = set()
@@ -288,8 +384,10 @@ def main():
                 # Bookmarks sayfasına git
                 if not scraper.navigate_to_bookmarks():
                     print("Bookmarks sayfasına gidilemedi!")
+                    save_cli_run_log(run_log, "failed")
                     if ask_continue():
                         config.update(get_scrape_config())
+                        run_log = None
                         continue
                     else:
                         break
@@ -309,8 +407,10 @@ def main():
                 # Profile git
                 if not scraper.navigate_to_profile(config["target_username"]):
                     print("Profile gidilemedi!")
+                    save_cli_run_log(run_log, "failed")
                     if ask_continue():
                         config.update(get_scrape_config())
+                        run_log = None
                         continue
                     else:
                         break
@@ -327,6 +427,14 @@ def main():
 
             if not tweets:
                 print("Hiç tweet toplanamadı!")
+                record_event(
+                    run_log,
+                    "timeline_loading",
+                    "error",
+                    "Scrape completed without collected tweets",
+                    reason="timeline_empty",
+                )
+                save_cli_run_log(run_log, "failed")
             else:
                 # Tarihe göre sırala (güncel'den eskiye)
                 tweets.sort(key=lambda t: t.date if t.date else datetime.min, reverse=True)
@@ -357,10 +465,21 @@ def main():
                 print(f"Toplam {len(tweets)} tweet toplandı.")
                 print(f"Dosya: {output_path}")
                 print("=" * 60)
+                record_event(
+                    run_log,
+                    "export_saving",
+                    "info",
+                    "Export saved",
+                    path=output_path,
+                    format=output_format,
+                    total_tweets=len(tweets),
+                )
+                save_cli_run_log(run_log, "completed")
 
             # Devam etmek istiyor mu?
             if ask_continue():
                 config.update(get_scrape_config())
+                run_log = None
             else:
                 print("\nProgram sonlandırılıyor...")
                 break
@@ -405,10 +524,31 @@ def main():
                     output_path = create_word_document(tweets, output_file, config["target_username"])
 
                 print(f"\nKısmi sonuçlar kaydedildi: {output_path}")
+                if run_log:
+                    record_event(
+                        run_log,
+                        "export_saving",
+                        "warning",
+                        "Partial export saved after interrupt",
+                        path=output_path,
+                        total_tweets=len(tweets),
+                    )
+                    save_cli_run_log(run_log, "cancelled")
             except Exception as save_err:
                 print(f"\nKaydetme hatası: {save_err}")
+                if run_log:
+                    record_event(
+                        run_log,
+                        "export_saving",
+                        "error",
+                        f"Partial export failed after interrupt: {save_err}",
+                        reason="export_failed",
+                    )
+                    save_cli_run_log(run_log, "failed")
         else:
             print("\nKaydedilecek tweet bulunamadı.")
+            if run_log:
+                save_cli_run_log(run_log, "cancelled")
 
         return 1
 
@@ -433,8 +573,36 @@ def main():
                     output_file = f"{base_name}_ERROR.docx"
                     output_path = create_word_document(tweets, output_file, config["target_username"])
                 print(f"Kaydedildi: {output_path}")
+                if run_log:
+                    record_event(
+                        run_log,
+                        "export_saving",
+                        "warning",
+                        "Error export saved after exception",
+                        path=output_path,
+                        total_tweets=len(tweets),
+                    )
+                    save_cli_run_log(run_log, "failed")
             except:
+                if run_log:
+                    record_event(
+                        run_log,
+                        "export_saving",
+                        "error",
+                        "Error export failed after exception",
+                        reason="export_failed",
+                    )
+                    save_cli_run_log(run_log, "failed")
                 pass
+        elif run_log:
+            record_event(
+                run_log,
+                "unknown_error",
+                "error",
+                f"Unhandled exception: {e}",
+                reason="unknown_error",
+            )
+            save_cli_run_log(run_log, "failed")
 
         return 1
 
