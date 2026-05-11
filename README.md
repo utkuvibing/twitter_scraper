@@ -1,28 +1,26 @@
-# X (Twitter) Scraper
+# X Scraper
 
-A Python-based automation tool that scrapes tweets from X (Twitter) profiles and bookmarks using Selenium WebDriver. Built as an AI-assisted project leveraging vibe coding methodology.
+Python/Selenium scraper for personal X/Twitter archiving, with an interactive CLI and a Tauri desktop interface. It can collect public profile posts or authenticated bookmarks, then export results as JSON, Markdown, or DOCX.
 
-## Features
+## Current Capabilities
 
-- **Profile Scraping** - Collect tweets from any public X profile (original posts only, replies filtered out)
-- **Bookmark Scraping** - Export your saved bookmarks with full content
-- **Multiple Scraping Modes** - By count, date range, or last N days
-- **Full Content Extraction** - Automatically expands "Show more" truncated tweets and X Articles
-- **Multi-Format Export** - Save as JSON (analysis-ready), Markdown, or Word (.docx)
-- **Smart Filtering** - Skips promotional tweets, deduplicates content automatically
-- **Anti-Detection** - Human-like typing, randomized delays, stealth browser configuration
-- **Graceful Interruption** - Ctrl+C saves all collected data with `_PARTIAL` suffix
-- **Session Reuse** - Scrape multiple profiles in one session without re-logging in
-- **Dual Login Support** - Manual login (Google/Apple OAuth) or automatic credentials
+- Profile scraping for public posts
+- Bookmark scraping for the signed-in user's saved posts
+- Count, last-N-days, and date-range scrape modes
+- Best-effort expansion for long tweets and X Articles
+- JSON, Markdown, and Word export
+- Session cookie reuse in the desktop sidecar
+- Pause, resume, cancel, and partial-result handling in supported flows
+- Versioned JSON export schema (`schema_version: "0.2"`)
+- Safer output handling with sanitized filenames and per-target output folders
 
-## Quick Start
+## Important Limits
 
-### Prerequisites
+This project automates the X web UI through Selenium. X changes its DOM, labels, and login flows frequently, so selectors and long-form extraction can break without warning. Treat scraped data as best-effort and verify important exports manually.
 
-- Python 3.8+
-- Google Chrome installed
+This project does not bypass access controls, does not include credentials, and should only be used for educational or personal archiving workflows that you are authorized to perform.
 
-### Installation
+## Install
 
 ```bash
 git clone https://github.com/utkuvibing/twitter_scraper.git
@@ -30,62 +28,95 @@ cd twitter_scraper
 pip install -r requirements.txt
 ```
 
-### Usage
+Chrome must be installed. `webdriver-manager` downloads the matching ChromeDriver.
+
+## CLI Usage
 
 ```bash
 python main.py
 ```
 
-The interactive CLI will guide you through:
-1. Choose login method (manual recommended for OAuth)
-2. Select source (profile or bookmarks)
-3. Set scraping mode (count / date range / last N days)
-4. Pick output format (JSON / Markdown / Word)
+The CLI prompts for:
 
-## Output Example
+1. Login method
+2. Profile or bookmarks source
+3. Count, date range, or last-N-days mode
+4. JSON, Markdown, or DOCX export
 
-**JSON output** (ideal for data analysis and LLM pipelines):
+Exports are written under `output/<target>/` by default.
+
+## Desktop Usage
+
+```bash
+npm install
+npm run tauri dev
+```
+
+The desktop app uses `python_sidecar/` for scraping and streams structured events to the React UI.
+
+## JSON Export Schema
+
+JSON exports use a stable top-level shape:
+
 ```json
 {
-  "source": "twitter",
-  "user": "@username",
-  "total_tweets": 150,
+  "schema_version": "0.2",
+  "source": "x.com",
+  "scrape_type": "profile",
+  "user": "@example",
+  "target": "example",
+  "exported_at": "2026-05-12T10:30:00+00:00",
+  "total_tweets": 1,
   "tweets": [
     {
       "id": "1234567890",
-      "text": "Tweet content here...",
-      "date": "2025-02-08T14:30:00+00:00",
-      "url": "https://x.com/username/status/1234567890",
-      "has_media": true,
-      "media_urls": ["..."],
-      "has_article": false
+      "text": "Tweet content",
+      "date": "2026-05-12T10:30:00+00:00",
+      "date_str": "May 12, 2026",
+      "url": "https://x.com/example/status/1234567890",
+      "tweet_url": "https://x.com/example/status/1234567890",
+      "has_media": false,
+      "media_urls": [],
+      "has_article": false,
+      "needs_full_text": false,
+      "likes": 0,
+      "retweets": 0,
+      "replies": 0,
+      "views": 0
     }
   ]
 }
 ```
 
-## Tech Stack
+`url` is kept for compatibility; `tweet_url` is the explicit canonical field used by the app.
 
-| Technology | Purpose |
-|---|---|
-| Python 3.8+ | Core language |
-| Selenium WebDriver | Browser automation & DOM interaction |
-| webdriver-manager | Automatic ChromeDriver management |
-| python-docx | Word document generation |
+## Validation
 
-## How It Works
+Run the local validation suite without opening a browser:
 
-The scraper controls a real Chrome browser to navigate X's web interface, scroll through content, and extract tweet data from the DOM. This approach handles X's dynamic JavaScript rendering without requiring API access.
+```bash
+python -m unittest discover -s tests
+python -m compileall main.py scraper.py document_generator.py export_schema.py python_sidecar
+```
 
-Key technical decisions:
-- **Browser automation over API** - No rate limits, no API costs, access to bookmarks
-- **Scroll-parse loop** - Continuously scrolls and parses new DOM elements as they load
-- **Deferred full-text fetch** - Collects tweet stubs first, then opens truncated tweets in new tabs for full content
-- **CDP stealth** - Uses Chrome DevTools Protocol to mask automation fingerprints
+For the desktop frontend:
 
-## Disclaimer
+```bash
+npm run build
+```
 
-This tool is for **educational and personal archiving purposes only**. Please respect X's Terms of Service. Use responsibly.
+## Project Structure
+
+```text
+main.py                 Interactive Python CLI
+scraper.py              CLI Selenium scraper
+document_generator.py   JSON/Markdown/DOCX export writers
+export_schema.py        Shared export schema and safe write helpers
+python_sidecar/         JSON-line scraper service used by Tauri
+src/                    React frontend
+src-tauri/              Tauri/Rust backend
+tests/                  Browser-free validation tests
+```
 
 ## License
 

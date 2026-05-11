@@ -10,6 +10,13 @@ import { Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType, Bord
 type SortField = 'date' | 'likes' | 'retweets' | 'replies' | 'views';
 type SortDirection = 'asc' | 'desc';
 type ExportFormat = 'json' | 'markdown' | 'word';
+const EXPORT_SCHEMA_VERSION = '0.2';
+
+const toIsoDate = (date: number | string | null | undefined) => {
+  if (date === null || date === undefined || date === '') return null;
+  const parsed = new Date(date);
+  return Number.isNaN(parsed.getTime()) ? String(date) : parsed.toISOString();
+};
 
 function ScrapeResults() {
   const { t } = useTranslation();
@@ -119,19 +126,24 @@ function ScrapeResults() {
   // Generate JSON content from tweets
   const generateJson = useCallback(() => {
     const data = {
-      source: 'twitter',
+      schema_version: EXPORT_SCHEMA_VERSION,
+      source: 'x.com',
+      scrape_type: useScrapeStore.getState().scrapeConfig?.type || 'profile',
       user: `@${target}`,
-      scraped_at: new Date().toISOString(),
+      target,
+      exported_at: new Date().toISOString(),
       total_tweets: tweets.length,
       tweets: tweets.map((t) => ({
         id: t.id,
         text: t.text,
-        date: new Date(t.date).toISOString(),
+        date: toIsoDate(t.date),
         date_str: t.date_str,
         url: t.tweet_url,
+        tweet_url: t.tweet_url,
         has_media: t.media_urls.length > 0,
         media_urls: t.media_urls,
         has_article: t.has_article,
+        needs_full_text: false,
         likes: t.likes,
         retweets: t.retweets,
         replies: t.replies,
@@ -145,6 +157,7 @@ function ScrapeResults() {
   const generateMarkdown = useCallback(() => {
     const lines: string[] = [];
     lines.push(`# @${target} - Tweet Archive\n`);
+    lines.push(`**Schema:** ${EXPORT_SCHEMA_VERSION}\n`);
     lines.push(`**Total:** ${tweets.length} tweets\n`);
     lines.push(`**Date:** ${new Date().toLocaleDateString()}\n`);
     lines.push('---\n');
