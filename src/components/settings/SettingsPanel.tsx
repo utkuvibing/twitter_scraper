@@ -1,18 +1,13 @@
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSettingsStore } from '../../stores/settingsStore';
-import { useLicense } from '../../hooks/useLicense';
 import { useSettings } from '../../hooks/useSettings';
 import { open } from '@tauri-apps/plugin-dialog';
 import {
-  KeyRound,
   Chrome,
   FolderOutput,
   Globe,
   Info,
-  Shield,
-  ShieldCheck,
-  ShieldPlus,
   CheckCircle2,
   FolderOpen,
 } from 'lucide-react';
@@ -23,55 +18,18 @@ export default function SettingsPanel() {
     language,
     chromePath,
     outputDir,
-    licenseKey,
-    licenseStatus,
     setLanguage,
     setChromePath,
     setOutputDir,
   } = useSettingsStore();
 
-  const { validateLicense } = useLicense();
   const { saveSettings } = useSettings();
 
-  const [localLicenseKey, setLocalLicenseKey] = useState(licenseKey);
-  const [isValidatingLicense, setIsValidatingLicense] = useState(false);
-  const [licenseError, setLicenseError] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<string | null>(null);
 
   useEffect(() => {
     i18n.changeLanguage(language);
   }, [language, i18n]);
-
-  useEffect(() => {
-    setLocalLicenseKey(licenseKey);
-  }, [licenseKey]);
-
-  const handleValidateLicense = async () => {
-    if (!localLicenseKey.trim()) {
-      setLicenseError(t('settings.licenseRequired', 'Please enter a license key'));
-      return;
-    }
-
-    setIsValidatingLicense(true);
-    setLicenseError(null);
-
-    try {
-      const result = await validateLicense(localLicenseKey);
-
-      if (result.valid && result.status !== 'free') {
-        showSaveStatus(result.message || 'License validated successfully');
-      } else if (!result.valid) {
-        setLicenseError(result.message || t('settings.invalidLicense', 'Invalid license key'));
-      }
-    } catch (error) {
-      setLicenseError(
-        t('settings.licenseValidationError', 'Failed to validate license')
-      );
-      console.error(error);
-    } finally {
-      setIsValidatingLicense(false);
-    }
-  };
 
   const showSaveStatus = (message: string) => {
     setSaveStatus(message);
@@ -109,31 +67,6 @@ export default function SettingsPanel() {
     }
   };
 
-  const getTierInfo = () => {
-    switch (licenseStatus) {
-      case 'pro':
-        return {
-          icon: <ShieldCheck size={18} />,
-          label: 'PRO',
-          className: 'bg-x-blue/15 text-x-blue border-x-blue/30',
-        };
-      case 'pro_plus':
-        return {
-          icon: <ShieldPlus size={18} />,
-          label: 'PRO+',
-          className: 'bg-purple-500/15 text-purple-400 border-purple-500/30',
-        };
-      default:
-        return {
-          icon: <Shield size={18} />,
-          label: 'FREE',
-          className: 'bg-white/5 text-x-gray border-x-border/50',
-        };
-    }
-  };
-
-  const tier = getTierInfo();
-
   return (
     <div className="w-full h-full bg-x-darker p-6 overflow-y-auto">
       <div className="max-w-2xl mx-auto space-y-5">
@@ -154,103 +87,6 @@ export default function SettingsPanel() {
             {saveStatus}
           </div>
         )}
-
-        {/* License */}
-        <section className="bg-x-dark/60 border border-x-border/40 rounded-xl p-5 space-y-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2.5">
-              <KeyRound size={18} className="text-x-gray" />
-              <h3 className="text-sm font-semibold text-x-light">
-                {t('settings.license', 'License')}
-              </h3>
-            </div>
-            <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full border ${tier.className}`}>
-              {tier.icon}
-              {tier.label}
-            </span>
-          </div>
-
-          <div className="flex gap-2">
-            <input
-              type="text"
-              placeholder="PRO-XXXX-XXXX-XXXX"
-              value={localLicenseKey}
-              onChange={(e) => setLocalLicenseKey(e.target.value)}
-              className="flex-1 bg-x-darker/80 border border-x-border/40 rounded-lg px-3.5 py-2 text-sm text-x-light placeholder-x-gray/50 focus:outline-none focus:border-x-blue/50 transition-colors font-mono"
-            />
-            <button
-              onClick={handleValidateLicense}
-              disabled={isValidatingLicense}
-              className="px-4 py-2 bg-x-blue text-white text-sm rounded-lg hover:bg-x-blue/80 transition-colors font-medium disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              {isValidatingLicense
-                ? t('settings.validating', 'Validating...')
-                : t('settings.validate', 'Validate')}
-            </button>
-          </div>
-          {licenseError && (
-            <p className="text-red-400 text-xs">{licenseError}</p>
-          )}
-
-          {/* Plan features */}
-          <div className="bg-x-darker/50 rounded-lg p-3.5 space-y-1.5">
-            <p className="text-xs font-medium text-x-gray mb-2">
-              {t('settings.currentPlan', 'Current Plan Features')}
-            </p>
-            {licenseStatus === 'free' && (
-              <ul className="text-xs text-x-gray/80 space-y-1">
-                <li className="flex items-center gap-2">
-                  <span className="w-1 h-1 rounded-full bg-x-gray/50" />
-                  {t('settings.freeLimitTweets', 'Up to 50 tweets per scrape')}
-                </li>
-                <li className="flex items-center gap-2">
-                  <span className="w-1 h-1 rounded-full bg-x-gray/50" />
-                  {t('settings.freeLimitExport', 'JSON export only')}
-                </li>
-                <li className="flex items-center gap-2">
-                  <span className="w-1 h-1 rounded-full bg-x-gray/50" />
-                  {t('settings.freeLimitBasic', 'Basic analytics')}
-                </li>
-              </ul>
-            )}
-            {licenseStatus === 'pro' && (
-              <ul className="text-xs text-x-gray/80 space-y-1">
-                <li className="flex items-center gap-2">
-                  <span className="w-1 h-1 rounded-full bg-x-blue" />
-                  {t('settings.proUnlimitedTweets', 'Unlimited tweets')}
-                </li>
-                <li className="flex items-center gap-2">
-                  <span className="w-1 h-1 rounded-full bg-x-blue" />
-                  {t('settings.proExportFormats', 'All export formats (JSON, CSV, Excel)')}
-                </li>
-                <li className="flex items-center gap-2">
-                  <span className="w-1 h-1 rounded-full bg-x-blue" />
-                  {t('settings.proAdvancedAnalytics', 'Advanced analytics')}
-                </li>
-              </ul>
-            )}
-            {licenseStatus === 'pro_plus' && (
-              <ul className="text-xs text-x-gray/80 space-y-1">
-                <li className="flex items-center gap-2">
-                  <span className="w-1 h-1 rounded-full bg-purple-400" />
-                  {t('settings.proplusEverything', 'Everything in Pro')}
-                </li>
-                <li className="flex items-center gap-2">
-                  <span className="w-1 h-1 rounded-full bg-purple-400" />
-                  {t('settings.proplusAI', 'AI-powered analysis')}
-                </li>
-                <li className="flex items-center gap-2">
-                  <span className="w-1 h-1 rounded-full bg-purple-400" />
-                  {t('settings.proplusScheduled', 'Scheduled scraping')}
-                </li>
-                <li className="flex items-center gap-2">
-                  <span className="w-1 h-1 rounded-full bg-purple-400" />
-                  {t('settings.proplusPriority', 'Priority support')}
-                </li>
-              </ul>
-            )}
-          </div>
-        </section>
 
         {/* Browser */}
         <section className="bg-x-dark/60 border border-x-border/40 rounded-xl p-5 space-y-3">

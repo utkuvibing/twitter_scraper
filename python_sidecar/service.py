@@ -323,9 +323,16 @@ class ScraperService:
             )
 
             fmt = cmd.get("format", "json")
-            target = cmd.get("target", "export")
+            target = cmd.get("target") or (
+                self.current_run_log.target if self.current_run_log else "export"
+            )
             filename = cmd.get("filename", "")
             output_dir = cmd.get("output_dir", "")
+            scrape_type = (
+                self.current_run_log.scrape_type
+                if self.current_run_log
+                else cmd.get("scrape_type", "profile")
+            )
 
             self.emit(
                 "log",
@@ -348,7 +355,11 @@ class ScraperService:
             )
             if fmt == "json":
                 path = create_json_document(
-                    self.current_tweets, filename, target, output_dir
+                    self.current_tweets,
+                    filename,
+                    target,
+                    output_dir,
+                    scrape_type=scrape_type,
                 )
             elif fmt == "md":
                 path = create_markdown_document(

@@ -446,7 +446,10 @@ def main():
                 if output_format == "json":
                     print("JSON dosyası oluşturuluyor...")
                     output_path = create_json_document(
-                        tweets, config["output_file"], config["target_username"]
+                        tweets,
+                        config["output_file"],
+                        config["target_username"],
+                        scrape_type=scrape_type,
                     )
                 elif output_format == "md":
                     print("Markdown dosyası oluşturuluyor...")
@@ -515,7 +518,12 @@ def main():
 
                 if output_format == "json":
                     output_file = f"{base_name}_PARTIAL.json"
-                    output_path = create_json_document(tweets, output_file, config["target_username"])
+                    output_path = create_json_document(
+                        tweets,
+                        output_file,
+                        config["target_username"],
+                        scrape_type=config.get("scrape_type", "profile"),
+                    )
                 elif output_format == "md":
                     output_file = f"{base_name}_PARTIAL.md"
                     output_path = create_markdown_document(tweets, output_file, config["target_username"])
@@ -565,7 +573,12 @@ def main():
             try:
                 if output_format == "json":
                     output_file = f"{base_name}_ERROR.json"
-                    output_path = create_json_document(tweets, output_file, config["target_username"])
+                    output_path = create_json_document(
+                        tweets,
+                        output_file,
+                        config["target_username"],
+                        scrape_type=config.get("scrape_type", "profile"),
+                    )
                 elif output_format == "md":
                     output_file = f"{base_name}_ERROR.md"
                     output_path = create_markdown_document(tweets, output_file, config["target_username"])

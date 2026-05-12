@@ -19,25 +19,34 @@ Use this checklist before tagging or publishing a desktop release. A release is 
 | Export validation completed for JSON/Markdown/DOCX | Not verified | Yes |
 | Known limitations and disclaimers included | Not verified | Yes |
 
+## Sprint Progress Notes
+
+- Implemented: placeholder license, paid-tier, AI, CSV/Excel, and scheduled-scraping claims were removed from Settings and first-run Onboarding.
+- Implemented: JSON export generation now accepts `scrape_type`, and CLI/sidecar JSON exports pass profile/bookmarks metadata through.
+- Implemented: browser-free tests now cover bookmark `scrape_type` metadata in payloads and saved JSON exports.
+- Implemented: `.github/workflows/ci.yml` runs existing Python unit tests, Python compile checks, frontend build, and Rust `cargo check`.
+- Still not complete: installer packaging, live X manual testing, privacy/security review, sidecar bundling, history re-export, and broader desktop release gates.
+
 ## Pre-Release Code Validation
 
 ### Python
-- [ ] Run `python -m unittest discover -s tests`.
-- [ ] Run `python -m compileall main.py scraper.py document_generator.py export_schema.py diagnostics.py python_sidecar`.
-- [ ] Verify `tests/test_exports.py` covers JSON schema version, safe paths, Markdown, and DOCX output.
-- [ ] Add or verify a test that bookmark exports can emit `scrape_type: "bookmarks"`.
+- [x] CI added for `python -m unittest discover -s tests`.
+- [x] CI added for `python -m compileall main.py scraper.py document_generator.py export_schema.py diagnostics.py python_sidecar`.
+- [x] Verify `tests/test_exports.py` covers JSON schema version, safe paths, Markdown, and DOCX output.
+- [x] Add or verify a test that bookmark exports can emit `scrape_type: "bookmarks"`.
 - [ ] Add or verify sidecar command tests for `login`, `scrape`, `export`, `diagnostics`, `pause`, `resume`, `cancel`, `status`, and `stop` without launching Chrome.
 - [ ] Confirm `python_sidecar/requirements.txt` and packaged sidecar dependencies match the release runtime.
 
 ### Frontend
-- [ ] Run `npm install` on a clean checkout.
-- [ ] Run `npm run build`.
+- [x] CI added using `npm ci`.
+- [x] CI added for `npm run build`.
 - [ ] Verify TypeScript build has no hidden errors from unused or stale hooks.
 - [ ] Verify `src/hooks/useScraper.ts` is either removed, covered, or clearly unused.
 - [ ] Verify result export UI uses the intended source of truth for JSON/Markdown/DOCX.
-- [ ] Verify hardcoded feature copy does not claim unshipped CSV/Excel/scheduling/paid-tier behavior.
+- [x] Verify Settings and Onboarding copy do not claim unshipped CSV/Excel/scheduling/paid-tier behavior.
 
 ### Rust/Tauri
+- [x] CI added for `cargo check --locked` in `src-tauri`.
 - [ ] Run `cargo test` in `src-tauri` after Rust tests exist.
 - [ ] Run `npm run tauri build`.
 - [ ] Verify command argument naming between React invokes and Rust command structs.
