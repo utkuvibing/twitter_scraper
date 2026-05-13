@@ -949,7 +949,11 @@ class XScraper:
         print("(İptal etmek için Ctrl+C - toplananlar kaydedilecek)\n")
         self.tweets_collected = []  # Instance variable olarak sakla
         no_progress_count = 0
+        no_new_collected_count = 0
+        recovery_attempts = 0
         max_no_progress = 8
+        max_no_new_collected = 14
+        max_recovery_attempts = 3
         scan_cycles = 0
         max_scan_cycles = max(60, count * 8)
 
@@ -982,13 +986,22 @@ class XScraper:
 
                 scroll_advanced = self._scroll_down()
 
-                if collected_after > collected_before or scroll_advanced:
+                if collected_after > collected_before:
                     no_progress_count = 0
+                    no_new_collected_count = 0
                 else:
-                    no_progress_count += 1
+                    no_new_collected_count += 1
+                    if scroll_advanced:
+                        no_progress_count = 0
+                    else:
+                        no_progress_count += 1
 
-                if no_progress_count in (2, 4, 6):
-                    print("Timeline takıldı gibi görünüyor, scroll recovery deneniyor...")
+                if (
+                    no_progress_count in (2, 4, 6)
+                    and recovery_attempts < max_recovery_attempts
+                ):
+                    recovery_attempts += 1
+                    print(f"Timeline takıldı gibi görünüyor, scroll recovery deneniyor ({recovery_attempts}/{max_recovery_attempts})...")
                     record_event(
                         self.run_log,
                         "timeline_loading",
@@ -997,9 +1010,27 @@ class XScraper:
                         collected=len(self.tweets_collected),
                         target=count,
                         no_progress_cycles=no_progress_count,
+                        no_new_collected_cycles=no_new_collected_count,
+                        recovery_attempts=recovery_attempts,
                         scan_cycles=scan_cycles,
                     )
                     self._scroll_recovery()
+
+                if no_new_collected_count >= max_no_new_collected:
+                    print(f"{max_no_new_collected} tarama turunda yeni tweet parse edilemedi. Kısmi sonuçla duruluyor.")
+                    record_event(
+                        self.run_log,
+                        "timeline_loading",
+                        "warning",
+                        "Timeline advanced or scanned but produced no new parsed tweets",
+                        reason="timeline_empty" if not self.tweets_collected else "partial_target_not_met",
+                        collected=len(self.tweets_collected),
+                        target=count,
+                        no_new_collected_cycles=no_new_collected_count,
+                        recovery_attempts=recovery_attempts,
+                        scan_cycles=scan_cycles,
+                    )
+                    break
 
                 if no_progress_count >= max_no_progress:
                     print(f"Timeline {max_no_progress} denemede ilerlemedi. Kısmi sonuçla duruluyor.")
@@ -1012,6 +1043,8 @@ class XScraper:
                         collected=len(self.tweets_collected),
                         target=count,
                         no_progress_cycles=no_progress_count,
+                        no_new_collected_cycles=no_new_collected_count,
+                        recovery_attempts=recovery_attempts,
                         scan_cycles=scan_cycles,
                     )
                     break
