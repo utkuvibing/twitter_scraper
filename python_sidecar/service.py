@@ -222,6 +222,20 @@ class ScraperService:
                         "Scrape completed without collected tweets",
                         reason="timeline_empty",
                     )
+                partial_count = (
+                    mode == "count"
+                    and cmd.get("count") is not None
+                    and len(tweets) < int(cmd.get("count", len(tweets)))
+                )
+                if partial_count:
+                    record_event(
+                        self.current_run_log,
+                        "timeline_loading",
+                        "warning",
+                        "Count scrape ended before requested tweet count",
+                        collected=len(tweets),
+                        target=cmd.get("count"),
+                    )
 
                 # Send complete event FIRST (lightweight, won't block pipe)
                 # Tweet updates are large and can block stdout pipe via IPC backpressure
@@ -234,8 +248,11 @@ class ScraperService:
                     failure_reason=self.current_run_log.failure_reason
                     if self.current_run_log
                     else None,
+                    partial=partial_count,
                 )
-                self.save_current_run_log("completed" if tweets else "failed")
+                self.save_current_run_log(
+                    "partial" if partial_count else "completed" if tweets else "failed"
+                )
                 self.emit(
                     "log",
                     level="info",

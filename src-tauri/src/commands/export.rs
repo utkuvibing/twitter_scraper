@@ -149,7 +149,8 @@ fn safe_filename(filename: &str) -> String {
         .unwrap_or("export")
         .to_string();
 
-    let stem = PathBuf::from(&name)
+    let name_path = PathBuf::from(&name);
+    let stem = name_path
         .file_stem()
         .and_then(|v| v.to_str())
         .unwrap_or("export");

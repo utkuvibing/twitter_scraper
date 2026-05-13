@@ -758,20 +758,82 @@ class XScraper:
                 pass
 
     def _scroll_down(self):
-        """Sayfayı aşağı kaydır ve yeni içerik yüklenmesini bekle"""
-        # Scroll öncesi tweet sayısı
-        old_count = len(self.driver.find_elements(By.XPATH, XPATHS["tweet_article"]))
+        """Sayfayı aşağı kaydır ve X'in sanal timeline DOM'unu tetikle."""
+        old_articles = self.driver.find_elements(By.XPATH, XPATHS["tweet_article"])
+        old_count = len(old_articles)
+        old_ids = self._get_article_ids_fast(old_articles)
 
-        # Scroll yap
-        self.driver.execute_script("window.scrollBy(0, 1000);")
+        # X aynı sayıda article tutup içerikleri değiştirebildiği için sadece
+        # article sayısına veya scroll height'a bakmak erken "sayfa sonu" üretir.
+        try:
+            if old_articles:
+                self.driver.execute_script(
+                    "arguments[0].scrollIntoView({block: 'end', behavior: 'instant'});",
+                    old_articles[-1],
+                )
+                time.sleep(0.25)
+        except Exception:
+            pass
+
+        try:
+            for _ in range(3):
+                self.driver.execute_script("window.scrollBy(0, window.innerHeight);")
+                time.sleep(0.2)
+        except Exception:
+            self.driver.execute_script("window.scrollBy(0, 1400);")
+
+        try:
+            body = self.driver.find_element(By.TAG_NAME, "body")
+            body.send_keys(Keys.PAGE_DOWN)
+            time.sleep(0.2)
+        except Exception:
+            pass
+
         time.sleep(random.uniform(SCROLL_PAUSE_MIN, SCROLL_PAUSE_MAX))
 
-        # Yeni tweet yüklenmesini bekle (max 5 saniye)
-        for _ in range(10):
-            new_count = len(self.driver.find_elements(By.XPATH, XPATHS["tweet_article"]))
-            if new_count > old_count:
-                break
-            time.sleep(0.5)
+        for _ in range(18):
+            new_articles = self.driver.find_elements(By.XPATH, XPATHS["tweet_article"])
+            new_ids = self._get_article_ids_fast(new_articles)
+            if len(new_articles) > old_count or (new_ids - old_ids - self.collected_tweet_ids):
+                return True
+            time.sleep(0.35)
+
+        return False
+
+    def _get_article_ids_fast(self, articles) -> set:
+        """Mevcut DOM article elementlerinden tweet ID'lerini hızlı çıkar."""
+        ids = set()
+        for article in articles:
+            try:
+                time_element = article.find_element(By.TAG_NAME, "time")
+                parent_link = time_element.find_element(By.XPATH, "./ancestor::a")
+                href = parent_link.get_attribute("href")
+                if href and "/status/" in href:
+                    tweet_id = href.split("/status/")[-1].split("?")[0].split("/")[0]
+                    if tweet_id:
+                        ids.add(tweet_id)
+            except Exception:
+                continue
+        return ids
+
+    def _scroll_recovery(self):
+        """Timeline takıldığında daha güçlü native scroll denemeleri yap."""
+        try:
+            body = self.driver.find_element(By.TAG_NAME, "body")
+            body.click()
+            for _ in range(6):
+                body.send_keys(Keys.PAGE_DOWN)
+                time.sleep(0.35)
+            body.send_keys(Keys.END)
+            time.sleep(1.0)
+        except Exception:
+            pass
+
+        try:
+            self.driver.execute_script("window.scrollBy(0, document.documentElement.clientHeight * 4);")
+            time.sleep(1.0)
+        except Exception:
+            pass
 
     def _scroll_to_bottom(self):
         """Sayfanın en altına git"""
@@ -791,16 +853,12 @@ class XScraper:
         print(f"{count} tweet toplanıyor...")
         print("(İptal etmek için Ctrl+C - toplananlar kaydedilecek)\n")
         self.tweets_collected = []  # Instance variable olarak sakla
-        stale_scroll_count = 0  # Scroll yapıp DOM'da yeni article gelmeyen sayı
-        max_stale_scrolls = 10  # Ardışık 10 scroll'da DOM'da yeni element yoksa dur
-        last_height = 0
-        same_height_count = 0
+        no_new_tweets_count = 0
+        max_no_new_tweets = 25
 
         try:
             while len(self.tweets_collected) < count:
-                # Scroll öncesi DOM'daki article sayısı
-                articles_before = len(self.driver.find_elements(By.XPATH, XPATHS["tweet_article"]))
-
+                collected_before = len(self.tweets_collected)
                 # Mevcut tweetleri topla
                 articles = self.driver.find_elements(By.XPATH, XPATHS["tweet_article"])
 
@@ -820,40 +878,41 @@ class XScraper:
                     show_more_tag = " [SHOW MORE]" if tweet.needs_full_text else ""
                     print(f"  [{len(self.tweets_collected)}/{count}] Tweet toplandı: {tweet.date_str}{article_tag}{show_more_tag}")
 
-                # Aşağı kaydır
-                self._scroll_down()
-
-                # Scroll sonrası DOM'daki article sayısı
-                articles_after = len(self.driver.find_elements(By.XPATH, XPATHS["tweet_article"]))
-
-                # Sayfa sonu tespiti: scroll height değişmedi mi?
-                new_height = self.driver.execute_script("return document.body.scrollHeight")
-                if new_height == last_height:
-                    same_height_count += 1
+                collected_after = len(self.tweets_collected)
+                if collected_after > collected_before:
+                    no_new_tweets_count = 0
                 else:
-                    same_height_count = 0
-                last_height = new_height
+                    no_new_tweets_count += 1
 
-                # DOM'da yeni article geldi mi?
-                if articles_after <= articles_before and same_height_count >= 3:
-                    stale_scroll_count += 1
-                    # Ekstra bekleme ile bir şans daha ver
-                    if stale_scroll_count <= 3:
-                        time.sleep(3)
-                else:
-                    stale_scroll_count = 0
-
-                if stale_scroll_count >= max_stale_scrolls:
-                    print("Sayfa sonuna ulaşıldı, daha fazla tweet yüklenmiyor.")
+                if no_new_tweets_count in (5, 12, 18):
+                    print("Timeline takıldı gibi görünüyor, scroll recovery deneniyor...")
                     record_event(
                         self.run_log,
                         "timeline_loading",
                         "warning",
-                        "Timeline stopped loading new tweet articles",
+                        "Timeline produced no new parsed tweets; trying scroll recovery",
+                        collected=len(self.tweets_collected),
+                        target=count,
+                        no_new_cycles=no_new_tweets_count,
+                    )
+                    self._scroll_recovery()
+
+                if no_new_tweets_count >= max_no_new_tweets:
+                    print(f"{max_no_new_tweets} scroll denemesinden sonra yeni tweet gelmedi. Kısmi sonuçla duruluyor.")
+                    record_event(
+                        self.run_log,
+                        "timeline_loading",
+                        "warning",
+                        "Timeline stopped producing new parsed tweets after recovery attempts",
                         reason="timeline_empty" if not self.tweets_collected else None,
                         collected=len(self.tweets_collected),
+                        target=count,
+                        no_new_cycles=no_new_tweets_count,
                     )
                     break
+
+                # Aşağı kaydır
+                self._scroll_down()
 
         except KeyboardInterrupt:
             print(f"\n\nDurduruldu! {len(self.tweets_collected)} tweet toplandı.")

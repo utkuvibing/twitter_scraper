@@ -1519,10 +1519,6 @@ class XScraper:
         self._emit("log", level="info", message=f"Collecting {count} tweets...")
         self.tweets_collected = []
         self._skipped_tweet_ids = set()
-        stale_scroll_count = 0
-        max_stale_scrolls = 15
-        last_height = 0
-        same_height_count = 0
         no_new_tweets_count = 0
         max_no_new_tweets = 20
 
@@ -1672,38 +1668,6 @@ class XScraper:
                     message=f"Scrolling... ({collected_after} tweets collected so far)",
                 )
                 self._scroll_down()
-
-                new_height = self.driver.execute_script(
-                    "return document.body.scrollHeight"
-                )
-                if new_height == last_height:
-                    same_height_count += 1
-                else:
-                    same_height_count = 0
-                last_height = new_height
-
-                if same_height_count >= 3:
-                    stale_scroll_count += 1
-                    if stale_scroll_count <= 3:
-                        time.sleep(3)
-                else:
-                    stale_scroll_count = 0
-
-                if stale_scroll_count >= max_stale_scrolls:
-                    self._emit(
-                        "log",
-                        level="info",
-                        message=f"End of timeline reached. Found {collected_after} of {count} requested tweets.",
-                    )
-                    record_event(
-                        self.run_log,
-                        "timeline_loading",
-                        "warning",
-                        "Timeline stopped loading new tweet articles",
-                        reason="timeline_empty" if not self.tweets_collected else None,
-                        collected=len(self.tweets_collected),
-                    )
-                    break
 
         except KeyboardInterrupt:
             self._emit(

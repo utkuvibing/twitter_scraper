@@ -464,7 +464,24 @@ def main():
 
                 print()
                 print("=" * 60)
-                print("TAMAMLANDI!")
+                partial_count = (
+                    mode.get("mode") == "count"
+                    and len(tweets) < mode.get("count", len(tweets))
+                )
+                if partial_count:
+                    print("KISMİ TAMAMLANDI!")
+                    print(f"İstenen: {mode['count']} tweet, toplanan: {len(tweets)} tweet.")
+                    print("Timeline daha fazla yeni tweet yüklemedi; run log detaylarına bakın.")
+                    record_event(
+                        run_log,
+                        "timeline_loading",
+                        "warning",
+                        "Count scrape ended before requested tweet count",
+                        collected=len(tweets),
+                        target=mode["count"],
+                    )
+                else:
+                    print("TAMAMLANDI!")
                 print(f"Toplam {len(tweets)} tweet toplandı.")
                 print(f"Dosya: {output_path}")
                 print("=" * 60)
@@ -477,7 +494,7 @@ def main():
                     format=output_format,
                     total_tweets=len(tweets),
                 )
-                save_cli_run_log(run_log, "completed")
+                save_cli_run_log(run_log, "partial" if partial_count else "completed")
 
             # Devam etmek istiyor mu?
             if ask_continue():
