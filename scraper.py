@@ -759,9 +759,8 @@ class XScraper:
 
     def _scroll_down(self):
         """Sayfayı aşağı kaydır ve X'in sanal timeline DOM'unu tetikle."""
-        old_articles = self.driver.find_elements(By.XPATH, XPATHS["tweet_article"])
-        old_count = len(old_articles)
-        old_ids = self._get_article_ids_fast(old_articles)
+        before = self._timeline_snapshot()
+        old_articles = before["articles"]
 
         # X aynı sayıda article tutup içerikleri değiştirebildiği için sadece
         # article sayısına veya scroll height'a bakmak erken "sayfa sonu" üretir.
@@ -791,14 +790,110 @@ class XScraper:
 
         time.sleep(random.uniform(SCROLL_PAUSE_MIN, SCROLL_PAUSE_MAX))
 
-        for _ in range(18):
-            new_articles = self.driver.find_elements(By.XPATH, XPATHS["tweet_article"])
-            new_ids = self._get_article_ids_fast(new_articles)
-            if len(new_articles) > old_count or (new_ids - old_ids - self.collected_tweet_ids):
+        for _ in range(24):
+            after = self._timeline_snapshot()
+            if self._timeline_advanced(before, after):
                 return True
             time.sleep(0.35)
 
         return False
+
+    def _timeline_snapshot(self) -> Dict:
+        """DOM ve scroll durumunu tek yerde ölç."""
+        articles = self.driver.find_elements(By.XPATH, XPATHS["tweet_article"])
+        try:
+            scroll_y = int(self.driver.execute_script("return Math.round(window.scrollY || 0);") or 0)
+            scroll_height = int(
+                self.driver.execute_script(
+                    "return Math.round(document.documentElement.scrollHeight || document.body.scrollHeight || 0);"
+                )
+                or 0
+            )
+            viewport_height = int(
+                self.driver.execute_script("return Math.round(window.innerHeight || document.documentElement.clientHeight || 0);")
+                or 0
+            )
+        except Exception:
+            scroll_y = 0
+            scroll_height = 0
+            viewport_height = 0
+
+        ids = self._get_article_ids_fast(articles)
+        return {
+            "article_count": len(articles),
+            "article_ids": ids,
+            "articles": articles,
+            "scroll_y": scroll_y,
+            "scroll_height": scroll_height,
+            "viewport_height": viewport_height,
+        }
+
+    def _timeline_advanced(self, before: Dict, after: Dict) -> bool:
+        """X timeline progress'i article sayısı, yeni ID veya scroll hareketinden anla."""
+        before_ids = before.get("article_ids", set())
+        after_ids = after.get("article_ids", set())
+        new_uncollected_ids = after_ids - before_ids - self.collected_tweet_ids
+
+        if new_uncollected_ids:
+            return True
+        if after.get("article_count", 0) > before.get("article_count", 0):
+            return True
+        if after.get("scroll_height", 0) > before.get("scroll_height", 0):
+            return True
+        if after.get("scroll_y", 0) > before.get("scroll_y", 0) + 80:
+            return True
+        return False
+
+    def _timeline_end_distance(self) -> Optional[int]:
+        """Viewport'un document bottom'a yaklaşık mesafesi."""
+        try:
+            value = self.driver.execute_script(
+                """
+                const scrollY = window.scrollY || 0;
+                const innerHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+                const scrollHeight = document.documentElement.scrollHeight || document.body.scrollHeight || 0;
+                return Math.round(scrollHeight - scrollY - innerHeight);
+                """
+            )
+            return int(value)
+        except Exception:
+            return None
+
+    def _classify_visible_timeline_issue(self) -> Optional[str]:
+        """Basit body text sinyallerinden neden ayrımı yap."""
+        try:
+            body_text = self.driver.find_element(By.TAG_NAME, "body").text.lower()
+        except Exception:
+            return None
+
+        if any(text in body_text for text in ("log in", "sign in", "giriş yap", "oturum aç")):
+            return "login_failed"
+        if any(text in body_text for text in ("rate limit", "try again later", "bir süre sonra tekrar dene")):
+            return "timeline_stalled"
+        if any(text in body_text for text in ("these posts are protected", "account suspended", "this account doesn")):
+            return "profile_navigation_failed"
+        return None
+
+    def _record_partial_target_not_met(self, label: str, collected: int, target: Optional[int], no_progress_cycles: int) -> None:
+        if not target or collected >= target:
+            return
+
+        visible_issue = self._classify_visible_timeline_issue()
+        end_distance = self._timeline_end_distance()
+        reason = visible_issue or ("timeline_empty" if collected == 0 else "partial_target_not_met")
+        message = f"{label} scrape ended before requested target was reached"
+        record_event(
+            self.run_log,
+            "timeline_loading",
+            "warning" if collected else "error",
+            message,
+            reason=reason,
+            collected=collected,
+            target=target,
+            missing=target - collected,
+            no_progress_cycles=no_progress_cycles,
+            end_distance_px=end_distance,
+        )
 
     def _get_article_ids_fast(self, articles) -> set:
         """Mevcut DOM article elementlerinden tweet ID'lerini hızlı çıkar."""
@@ -853,11 +948,14 @@ class XScraper:
         print(f"{count} tweet toplanıyor...")
         print("(İptal etmek için Ctrl+C - toplananlar kaydedilecek)\n")
         self.tweets_collected = []  # Instance variable olarak sakla
-        no_new_tweets_count = 0
-        max_no_new_tweets = 25
+        no_progress_count = 0
+        max_no_progress = 8
+        scan_cycles = 0
+        max_scan_cycles = max(60, count * 8)
 
         try:
             while len(self.tweets_collected) < count:
+                scan_cycles += 1
                 collected_before = len(self.tweets_collected)
                 # Mevcut tweetleri topla
                 articles = self.driver.find_elements(By.XPATH, XPATHS["tweet_article"])
@@ -879,40 +977,58 @@ class XScraper:
                     print(f"  [{len(self.tweets_collected)}/{count}] Tweet toplandı: {tweet.date_str}{article_tag}{show_more_tag}")
 
                 collected_after = len(self.tweets_collected)
-                if collected_after > collected_before:
-                    no_new_tweets_count = 0
-                else:
-                    no_new_tweets_count += 1
+                if collected_after >= count:
+                    break
 
-                if no_new_tweets_count in (5, 12, 18):
+                scroll_advanced = self._scroll_down()
+
+                if collected_after > collected_before or scroll_advanced:
+                    no_progress_count = 0
+                else:
+                    no_progress_count += 1
+
+                if no_progress_count in (2, 4, 6):
                     print("Timeline takıldı gibi görünüyor, scroll recovery deneniyor...")
                     record_event(
                         self.run_log,
                         "timeline_loading",
                         "warning",
-                        "Timeline produced no new parsed tweets; trying scroll recovery",
+                        "Timeline did not advance; trying scroll recovery",
                         collected=len(self.tweets_collected),
                         target=count,
-                        no_new_cycles=no_new_tweets_count,
+                        no_progress_cycles=no_progress_count,
+                        scan_cycles=scan_cycles,
                     )
                     self._scroll_recovery()
 
-                if no_new_tweets_count >= max_no_new_tweets:
-                    print(f"{max_no_new_tweets} scroll denemesinden sonra yeni tweet gelmedi. Kısmi sonuçla duruluyor.")
+                if no_progress_count >= max_no_progress:
+                    print(f"Timeline {max_no_progress} denemede ilerlemedi. Kısmi sonuçla duruluyor.")
                     record_event(
                         self.run_log,
                         "timeline_loading",
                         "warning",
-                        "Timeline stopped producing new parsed tweets after recovery attempts",
-                        reason="timeline_empty" if not self.tweets_collected else None,
+                        "Timeline stopped advancing after recovery attempts",
+                        reason="timeline_empty" if not self.tweets_collected else "timeline_stalled",
                         collected=len(self.tweets_collected),
                         target=count,
-                        no_new_cycles=no_new_tweets_count,
+                        no_progress_cycles=no_progress_count,
+                        scan_cycles=scan_cycles,
                     )
                     break
 
-                # Aşağı kaydır
-                self._scroll_down()
+                if scan_cycles >= max_scan_cycles:
+                    print("Maksimum timeline tarama denemesine ulaşıldı. Kısmi sonuçla duruluyor.")
+                    record_event(
+                        self.run_log,
+                        "timeline_loading",
+                        "warning",
+                        "Maximum timeline scan cycles reached before target count",
+                        reason="partial_target_not_met",
+                        collected=len(self.tweets_collected),
+                        target=count,
+                        scan_cycles=scan_cycles,
+                    )
+                    break
 
         except KeyboardInterrupt:
             print(f"\n\nDurduruldu! {len(self.tweets_collected)} tweet toplandı.")
@@ -929,6 +1045,13 @@ class XScraper:
                 "error",
                 "No tweets collected after count scrape",
                 reason="timeline_empty",
+            )
+        else:
+            self._record_partial_target_not_met(
+                "Count",
+                len(self.tweets_collected),
+                count,
+                no_progress_count,
             )
         return self.tweets_collected
 
@@ -993,12 +1116,15 @@ class XScraper:
         print(f"Tarih aralığı: {start_date.strftime('%Y-%m-%d')} - {end_date.strftime('%Y-%m-%d')}")
         print("(İptal etmek için Ctrl+C - toplananlar kaydedilecek)\n")
         self.tweets_collected = []
-        no_new_tweets_count = 0
-        max_no_new_tweets = 15
+        no_progress_count = 0
+        max_no_progress = 8
+        scan_cycles = 0
+        max_scan_cycles = 160
         reached_start_date = False
 
         try:
             while not reached_start_date:
+                scan_cycles += 1
                 articles = self.driver.find_elements(By.XPATH, XPATHS["tweet_article"])
                 new_tweets_found = False
 
@@ -1022,27 +1148,55 @@ class XScraper:
                             new_tweets_found = True
                             print(f"  [{len(self.tweets_collected)}] Tweet: {tweet.date_str}")
 
-                if new_tweets_found:
-                    no_new_tweets_count = 0
-                else:
-                    no_new_tweets_count += 1
+                if reached_start_date:
+                    break
 
-                if no_new_tweets_count >= max_no_new_tweets:
-                    print("Daha fazla tweet bulunamadı veya tarih aralığı dışına çıkıldı.")
+                scroll_advanced = self._scroll_down()
+
+                if new_tweets_found or scroll_advanced:
+                    no_progress_count = 0
+                else:
+                    no_progress_count += 1
+
+                if no_progress_count in (2, 4, 6):
+                    print("Timeline takıldı gibi görünüyor, scroll recovery deneniyor...")
                     record_event(
                         self.run_log,
                         "timeline_loading",
                         "warning",
-                        "No more tweets found before date scrape completed",
-                        reason="timeline_empty" if not self.tweets_collected else None,
+                        "Timeline did not advance during date scrape; trying scroll recovery",
                         collected=len(self.tweets_collected),
+                        no_progress_cycles=no_progress_count,
+                        scan_cycles=scan_cycles,
+                    )
+                    self._scroll_recovery()
+
+                if no_progress_count >= max_no_progress:
+                    print("Daha fazla tweet bulunamadı veya timeline ilerlemiyor.")
+                    record_event(
+                        self.run_log,
+                        "timeline_loading",
+                        "warning",
+                        "Timeline stopped advancing before date scrape completed",
+                        reason="timeline_empty" if not self.tweets_collected else "timeline_stalled",
+                        collected=len(self.tweets_collected),
+                        no_progress_cycles=no_progress_count,
+                        scan_cycles=scan_cycles,
                     )
                     break
 
-                if reached_start_date:
+                if scan_cycles >= max_scan_cycles:
+                    print("Maksimum timeline tarama denemesine ulaşıldı. Kısmi sonuçla duruluyor.")
+                    record_event(
+                        self.run_log,
+                        "timeline_loading",
+                        "warning",
+                        "Maximum timeline scan cycles reached during date scrape",
+                        reason="partial_target_not_met",
+                        collected=len(self.tweets_collected),
+                        scan_cycles=scan_cycles,
+                    )
                     break
-
-                self._scroll_down()
 
         except KeyboardInterrupt:
             print(f"\n\nDurduruldu! {len(self.tweets_collected)} tweet toplandı.")
@@ -1094,11 +1248,14 @@ class XScraper:
         print("(İptal etmek için Ctrl+C - toplananlar kaydedilecek)\n")
 
         self.tweets_collected = []
-        no_new_tweets_count = 0
-        max_no_new_tweets = 10  # Ardışık 10 scroll'da yeni tweet yoksa dur
+        no_progress_count = 0
+        max_no_progress = 8
+        scan_cycles = 0
+        max_scan_cycles = 180 if get_all else max(60, (count or 20) * 8)
 
         try:
             while True:
+                scan_cycles += 1
                 # Count kontrolü
                 if not get_all and count and len(self.tweets_collected) >= count:
                     break
@@ -1124,25 +1281,58 @@ class XScraper:
                     else:
                         print(f"  [{len(self.tweets_collected)}] Bookmark toplandı: {tweet.date_str}{article_tag}{show_more_tag}")
 
-                if new_tweets_found:
-                    no_new_tweets_count = 0
-                else:
-                    no_new_tweets_count += 1
+                if not get_all and count and len(self.tweets_collected) >= count:
+                    break
 
-                if no_new_tweets_count >= max_no_new_tweets:
-                    print("Daha fazla bookmark bulunamadı.")
+                scroll_advanced = self._scroll_down()
+
+                if new_tweets_found or scroll_advanced:
+                    no_progress_count = 0
+                else:
+                    no_progress_count += 1
+
+                if no_progress_count in (2, 4, 6):
+                    print("Timeline takıldı gibi görünüyor, scroll recovery deneniyor...")
                     record_event(
                         self.run_log,
                         "timeline_loading",
                         "warning",
-                        "No more bookmark tweets found",
-                        reason="timeline_empty" if not self.tweets_collected else None,
+                        "Bookmarks timeline did not advance; trying scroll recovery",
                         collected=len(self.tweets_collected),
+                        target=count,
+                        no_progress_cycles=no_progress_count,
+                        scan_cycles=scan_cycles,
+                    )
+                    self._scroll_recovery()
+
+                if no_progress_count >= max_no_progress:
+                    print("Daha fazla bookmark bulunamadı veya timeline ilerlemiyor.")
+                    record_event(
+                        self.run_log,
+                        "timeline_loading",
+                        "warning",
+                        "Bookmarks timeline stopped advancing",
+                        reason="timeline_empty" if not self.tweets_collected else "timeline_stalled",
+                        collected=len(self.tweets_collected),
+                        target=count,
+                        no_progress_cycles=no_progress_count,
+                        scan_cycles=scan_cycles,
                     )
                     break
 
-                # Aşağı kaydır
-                self._scroll_down()
+                if scan_cycles >= max_scan_cycles:
+                    print("Maksimum bookmark tarama denemesine ulaşıldı. Kısmi sonuçla duruluyor.")
+                    record_event(
+                        self.run_log,
+                        "timeline_loading",
+                        "warning",
+                        "Maximum bookmark scan cycles reached",
+                        reason="partial_target_not_met" if count else "timeline_stalled",
+                        collected=len(self.tweets_collected),
+                        target=count,
+                        scan_cycles=scan_cycles,
+                    )
+                    break
 
         except KeyboardInterrupt:
             print(f"\n\nDurduruldu! {len(self.tweets_collected)} bookmark toplandı.")
@@ -1159,5 +1349,12 @@ class XScraper:
                 "error",
                 "No bookmarks collected",
                 reason="timeline_empty",
+            )
+        elif count:
+            self._record_partial_target_not_met(
+                "Bookmarks",
+                len(self.tweets_collected),
+                count,
+                no_progress_count,
             )
         return self.tweets_collected
