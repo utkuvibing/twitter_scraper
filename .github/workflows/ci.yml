@@ -64,6 +64,17 @@ jobs:
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Build frontend for Tauri context
+        run: |
+          npm ci
+          npm run build
+
       - name: Install Linux Tauri dependencies
         run: |
           sudo apt-get update
