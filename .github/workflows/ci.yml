@@ -77,4 +77,18 @@ jobs:
 
       - name: Check Tauri crate
         working-directory: src-tauri
-        run: cargo check --locked
+        run: |
+          set +e
+          cargo check --locked 2>&1 | tee cargo-check.log
+          status=${PIPESTATUS[0]}
+          if [ "$status" -ne 0 ]; then
+            {
+              echo "### cargo check failed"
+              echo '```text'
+              tail -n 120 cargo-check.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            tail_line=$(tail -n 40 cargo-check.log | tr '\n' ' ' | sed 's/%/%25/g; s/\r/%0D/g; s/"/'\''/g')
+            echo "::error title=cargo check failed::$tail_line"
+          fi
+          exit "$status"
