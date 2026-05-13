@@ -19,7 +19,9 @@ from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import (
     TimeoutException,
     NoSuchElementException,
+    NoSuchWindowException,
     StaleElementReferenceException,
+    WebDriverException,
 )
 from webdriver_manager.chrome import ChromeDriverManager
 
@@ -983,6 +985,7 @@ class XScraper:
         max_recovery_attempts = 3
         scan_cycles = 0
         max_scan_cycles = max(60, count * 8)
+        browser_lost = False
 
         try:
             while len(self.tweets_collected) < count:
@@ -1093,9 +1096,40 @@ class XScraper:
         except KeyboardInterrupt:
             print(f"\n\nDurduruldu! {len(self.tweets_collected)} tweet toplandı.")
             raise  # Ana programa ilet
+        except NoSuchWindowException as e:
+            browser_lost = True
+            print(f"\nBrowser penceresi kapandı veya Chrome bağlantısı koptu. {len(self.tweets_collected)} tweet kısmi sonuç olarak kullanılacak.")
+            record_event(
+                self.run_log,
+                "browser",
+                "error" if not self.tweets_collected else "warning",
+                f"Browser window closed during count scrape: {e}",
+                reason="browser_window_closed",
+                collected=len(self.tweets_collected),
+                target=count,
+                scan_cycles=scan_cycles,
+            )
+        except WebDriverException as e:
+            if "no such window" not in str(e).lower() and "web view not found" not in str(e).lower():
+                raise
+            browser_lost = True
+            print(f"\nChrome webview kayboldu. {len(self.tweets_collected)} tweet kısmi sonuç olarak kullanılacak.")
+            record_event(
+                self.run_log,
+                "browser",
+                "error" if not self.tweets_collected else "warning",
+                f"Chrome webview was lost during count scrape: {e}",
+                reason="browser_window_closed",
+                collected=len(self.tweets_collected),
+                target=count,
+                scan_cycles=scan_cycles,
+            )
 
         # Scroll bitti, şimdi show more olan tweetlerin tam metnini al
-        self._process_show_more_tweets()
+        if browser_lost:
+            print("Browser kapandığı için show more/article tam metin alma adımı atlandı.")
+        else:
+            self._process_show_more_tweets()
 
         print(f"Toplam {len(self.tweets_collected)} tweet toplandı.")
         if not self.tweets_collected:

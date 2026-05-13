@@ -582,6 +582,16 @@ def main():
         import traceback
         traceback.print_exc()
 
+        if scraper and hasattr(scraper, 'tweets_collected') and scraper.tweets_collected and not tweets:
+            tweets = scraper.tweets_collected
+
+        error_text = str(e).lower()
+        error_reason = (
+            "browser_window_closed"
+            if "no such window" in error_text or "web view not found" in error_text
+            else "unknown_error"
+        )
+
         # Hata durumunda da kaydetmeyi dene
         if tweets and config:
             print(f"\nHataya rağmen {len(tweets)} tweet kaydediliyor...")
@@ -609,10 +619,11 @@ def main():
                         "export_saving",
                         "warning",
                         "Error export saved after exception",
+                        reason=error_reason,
                         path=output_path,
                         total_tweets=len(tweets),
                     )
-                    save_cli_run_log(run_log, "failed")
+                    save_cli_run_log(run_log, "partial")
             except:
                 if run_log:
                     record_event(
@@ -630,7 +641,7 @@ def main():
                 "unknown_error",
                 "error",
                 f"Unhandled exception: {e}",
-                reason="unknown_error",
+                reason=error_reason,
             )
             save_cli_run_log(run_log, "failed")
 
