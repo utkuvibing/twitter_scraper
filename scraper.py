@@ -13,6 +13,7 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import (
@@ -760,43 +761,75 @@ class XScraper:
     def _scroll_down(self):
         """Sayfayı aşağı kaydır ve X'in sanal timeline DOM'unu tetikle."""
         before = self._timeline_snapshot()
-        old_articles = before["articles"]
 
-        # X aynı sayıda article tutup içerikleri değiştirebildiği için sadece
-        # article sayısına veya scroll height'a bakmak erken "sayfa sonu" üretir.
+        # X timeline React/virtualized bir liste. Bazı profillerde window.scrollBy
+        # tek başına hiçbir şeyi tetiklemiyor; gerçek wheel input daha güvenilir.
+        for attempt in range(4):
+            self._perform_timeline_scroll(attempt + 1)
+            time.sleep(random.uniform(SCROLL_PAUSE_MIN, SCROLL_PAUSE_MAX))
+
+            for _ in range(10):
+                after = self._timeline_snapshot()
+                if self._timeline_advanced(before, after):
+                    return True
+                time.sleep(0.3)
+
+        return False
+
+    def _perform_timeline_scroll(self, intensity: int = 1) -> None:
+        """Birden fazla scroll yöntemi dene; X her yönteme aynı cevap vermiyor."""
+        delta = 900 * max(1, intensity)
+
         try:
-            if old_articles:
-                self.driver.execute_script(
-                    "arguments[0].scrollIntoView({block: 'end', behavior: 'instant'});",
-                    old_articles[-1],
-                )
-                time.sleep(0.25)
+            self.driver.execute_script("window.focus();")
         except Exception:
             pass
 
         try:
-            for _ in range(3):
-                self.driver.execute_script("window.scrollBy(0, window.innerHeight);")
-                time.sleep(0.2)
+            ActionChains(self.driver).scroll_by_amount(0, delta).perform()
+            time.sleep(0.15)
         except Exception:
-            self.driver.execute_script("window.scrollBy(0, 1400);")
+            pass
+
+        try:
+            self.driver.execute_cdp_cmd(
+                "Input.dispatchMouseEvent",
+                {
+                    "type": "mouseWheel",
+                    "x": 600,
+                    "y": 600,
+                    "deltaX": 0,
+                    "deltaY": delta,
+                },
+            )
+            time.sleep(0.15)
+        except Exception:
+            pass
+
+        try:
+            self.driver.execute_script(
+                """
+                const delta = arguments[0];
+                window.dispatchEvent(new WheelEvent('wheel', {
+                  deltaY: delta,
+                  bubbles: true,
+                  cancelable: true
+                }));
+                const scroller = document.scrollingElement || document.documentElement || document.body;
+                scroller.scrollBy(0, delta);
+                """,
+                delta,
+            )
+            time.sleep(0.15)
+        except Exception:
+            pass
 
         try:
             body = self.driver.find_element(By.TAG_NAME, "body")
             body.send_keys(Keys.PAGE_DOWN)
-            time.sleep(0.2)
+            time.sleep(0.15)
         except Exception:
             pass
-
-        time.sleep(random.uniform(SCROLL_PAUSE_MIN, SCROLL_PAUSE_MAX))
-
-        for _ in range(24):
-            after = self._timeline_snapshot()
-            if self._timeline_advanced(before, after):
-                return True
-            time.sleep(0.35)
-
-        return False
 
     def _timeline_snapshot(self) -> Dict:
         """DOM ve scroll durumunu tek yerde ölç."""
@@ -916,19 +949,13 @@ class XScraper:
         try:
             body = self.driver.find_element(By.TAG_NAME, "body")
             body.click()
-            for _ in range(6):
-                body.send_keys(Keys.PAGE_DOWN)
-                time.sleep(0.35)
-            body.send_keys(Keys.END)
-            time.sleep(1.0)
+            time.sleep(0.2)
         except Exception:
             pass
 
-        try:
-            self.driver.execute_script("window.scrollBy(0, document.documentElement.clientHeight * 4);")
-            time.sleep(1.0)
-        except Exception:
-            pass
+        for intensity in (2, 3, 4, 5):
+            self._perform_timeline_scroll(intensity)
+            time.sleep(0.4)
 
     def _scroll_to_bottom(self):
         """Sayfanın en altına git"""
