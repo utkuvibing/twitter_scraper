@@ -6,50 +6,30 @@ __pycache__/
 .Python
 *.egg-info/
 build/
-.sessions/
 
-# Node / Frontend
-node_modules/
-dist/
-
-# Rust / Tauri
-src-tauri/target/
-*.msi
-*.exe
-*.dmg
-
-# Output data (personal scraped data)
-output/
-
-# Personal documents
-*.docx
-*.doc
-
-# IDE / Editor
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# Claude
-.claude/
-
-# Environment
+# Virtual environments
 .env
 venv/
 env/
 .venv/
 
-# OS
+# Local browser/session data
+.sessions/
+
+# Scraped output and personal documents
+output/
+*.docx
+*.doc
+
+# Editor and OS files
+.vscode/
+.idea/
+*.swp
+*.swo
 .DS_Store
 Thumbs.db
 
-# Logs
+# Logs and temp files
 *.log
-
-# Temp files
 tmpclaude-*
 nul
-
-# Generated scripts
-generate_portfolio_doc.py
