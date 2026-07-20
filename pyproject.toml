@@ -45,5 +45,6 @@ py-modules = [
   "export_schema",
   "main",
   "scraper",
+  "terminal_ui",
   "x_scraper_cli",
 ]

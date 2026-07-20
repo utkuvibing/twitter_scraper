@@ -150,6 +150,24 @@ class CliRequestTests(unittest.TestCase):
 
         self.assertIn("1.0.0", stdout.getvalue())
 
+    def test_terminal_ui_emits_colored_banner_when_color_is_enabled(self):
+        from terminal_ui import TerminalUI
+
+        stream = io.StringIO()
+        TerminalUI(stream=stream, color=True).banner()
+        output = stream.getvalue()
+
+        self.assertIn("x-scraper", output)
+        self.assertIn("\x1b[", output)
+
+    def test_terminal_ui_has_plain_text_fallback(self):
+        from terminal_ui import TerminalUI
+
+        stream = io.StringIO()
+        TerminalUI(stream=stream, color=False).status("success", "Ready")
+
+        self.assertEqual(stream.getvalue(), "[OK] Ready\n")
+
     def test_legacy_diagnostics_flag_maps_to_the_diagnostics_command(self):
         observed_urls = []
 
