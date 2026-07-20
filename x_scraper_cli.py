@@ -21,6 +21,7 @@ from document_generator import (
     create_word_document,
 )
 from scraper import XScraper
+from time_utils import ensure_utc, filter_tweets_by_range, tweet_sort_key, utc_day_range, utc_now
 
 
 ALLOWED_DIAGNOSTICS_HOSTS = {"x.com", "www.x.com", "twitter.com", "www.twitter.com"}
@@ -86,7 +87,8 @@ def _validated_handle(value: str) -> str:
 
 def _parse_iso_date(value: str, label: str) -> datetime:
     try:
-        return datetime.strptime(value, "%Y-%m-%d")
+        start, _ = utc_day_range(value, value)
+        return start
     except (TypeError, ValueError) as exc:
         raise CliValidationError(f"{label} must use YYYY-MM-DD") from exc
 
@@ -110,7 +112,7 @@ def _mode_config(namespace: argparse.Namespace) -> dict[str, Any]:
         return {"mode": "days", "days": namespace.days}
 
     start = _parse_iso_date(namespace.start_date, "start date")
-    end = _parse_iso_date(namespace.end_date, "end date").replace(hour=23, minute=59, second=59)
+    _, end = utc_day_range(namespace.end_date, namespace.end_date)
     if start > end:
         raise CliValidationError("start date must not be after end date")
     return {"mode": "date_range", "start": start, "end": end}
@@ -198,13 +200,23 @@ def _collect_request_tweets(scraper: XScraper, request: ScrapeRequest, run_log: 
             return scraper.scrape_bookmarks(count=int(mode["count"]))
         tweets = scraper.scrape_bookmarks(get_all=True)
         if mode["mode"] == "days":
-            cutoff = datetime.now() - timedelta(days=int(mode["days"]))
-            return [tweet for tweet in tweets if tweet.date and tweet.date >= cutoff]
-        return [
-            tweet
-            for tweet in tweets
-            if tweet.date and mode["start"] <= tweet.date <= mode["end"]
-        ]
+            cutoff = utc_now() - timedelta(days=int(mode["days"]))
+            return [
+                tweet
+                for tweet in tweets
+                if tweet.date and ensure_utc(tweet.date) >= cutoff
+            ]
+        filtered, missing = filter_tweets_by_range(tweets, mode["start"], mode["end"])
+        if missing:
+            record_event(
+                run_log,
+                "date_filtering",
+                "warning",
+                "Bookmarks with unavailable timestamps were excluded from the date range",
+                reason="tweet_date_unavailable",
+                count=len(missing),
+            )
+        return filtered
 
     if not scraper.navigate_to_profile(request.target_username):
         record_event(
@@ -290,7 +302,7 @@ def run_cli_scrape(request: ScrapeRequest, scraper_factory=XScraper) -> int:
             _save_run_log(run_log, "failed", request.output_dir)
             return 2
 
-        tweets.sort(key=lambda tweet: tweet.date or datetime.min, reverse=True)
+        tweets.sort(key=tweet_sort_key, reverse=True)
         output_path = _write_export(tweets, request)
         record_event(
             run_log,

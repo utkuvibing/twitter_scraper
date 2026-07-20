@@ -44,6 +44,7 @@ from diagnostics import (
     record_event,
     run_selector_diagnostics,
 )
+from time_utils import DateRangeStopTracker, ensure_utc, parse_x_datetime, utc_now
 
 
 SKIP_ALREADY_COLLECTED = "SKIP_ALREADY_COLLECTED"
@@ -54,12 +55,13 @@ class Tweet:
     """Tweet veri yapısı"""
     id: str
     text: str
-    date: datetime
+    date: Optional[datetime]
     date_str: str
     media_urls: List[str]
     tweet_url: str
     needs_full_text: bool = False  # Show more varsa True
     has_article: bool = False  # X Article varsa True
+    is_pinned: bool = False
 
 
 class XScraper:
@@ -70,6 +72,7 @@ class XScraper:
         headless: bool = False,
         run_log: Optional[ScrapeRunLog] = None,
         browser_profile: Optional[str] = None,
+        exclude_promotional_posts: bool = False,
     ):
         """
         Scraper'ı başlat
@@ -84,6 +87,7 @@ class XScraper:
         self.browser_profile = (
             str(Path(browser_profile).expanduser().resolve()) if browser_profile else None
         )
+        self.exclude_promotional_posts = exclude_promotional_posts
 
     def _setup_driver(self):
         """Chrome WebDriver'ı yapılandır ve başlat"""
@@ -446,6 +450,7 @@ class XScraper:
         """
         try:
             # Pinned / Reply kontrolü
+            is_pinned = False
             try:
                 social_context = article.find_element(By.CSS_SELECTOR, '[data-testid="socialContext"]')
                 context_text = social_context.text.lower()
@@ -453,6 +458,10 @@ class XScraper:
                     return None  # Reply, atla
                 if self._is_repost_context(context_text):
                     return None  # Repost, atla
+                is_pinned = any(
+                    marker in context_text
+                    for marker in ("pinned", "sabitlendi", "sabitlenmiş", "fijado")
+                )
                 # "Pinned" / "Sabitlenmiş" ise normal tweet olarak devam et
             except NoSuchElementException:
                 pass  # socialContext yok, normal tweet
@@ -529,7 +538,7 @@ class XScraper:
                 print("      [ARTICLE] Article detected")
 
             # Promo/tanıtım tweetlerini atla
-            if text:
+            if self.exclude_promotional_posts and text:
                 text_lower = text.lower()
                 promo_patterns = [
                     "link in bio",
@@ -543,17 +552,28 @@ class XScraper:
                     return None  # Promo tweet, atla
 
             # Tarihi al
-            date = None
-            date_str = ""
+            date: Optional[datetime] = None
+            date_str = "Date unavailable"
             try:
                 time_elem = article.find_element(By.TAG_NAME, "time")
                 datetime_attr = time_elem.get_attribute("datetime")
-                date_str = time_elem.text
+                date_str = time_elem.text or "Date unavailable"
                 if datetime_attr:
-                    date = datetime.fromisoformat(datetime_attr.replace("Z", "+00:00"))
-            except:
-                date = datetime.now()
-                date_str = "Date unavailable"
+                    date = parse_x_datetime(datetime_attr)
+                else:
+                    date_str = "Date unavailable"
+            except (NoSuchElementException, StaleElementReferenceException, WebDriverException):
+                date = None
+
+            if date is None:
+                record_event(
+                    self.run_log,
+                    "tweet_parsing",
+                    "warning",
+                    "Tweet timestamp was unavailable",
+                    reason="tweet_date_unavailable",
+                    tweet_id=tweet_id,
+                )
 
             # Medya URL'lerini al
             media_urls = []
@@ -597,6 +617,7 @@ class XScraper:
                 tweet_url=tweet_url,
                 needs_full_text=has_show_more,
                 has_article=has_article,
+                is_pinned=is_pinned,
             )
 
         except StaleElementReferenceException:
@@ -1272,8 +1293,8 @@ class XScraper:
         Returns:
             Tweet listesi
         """
-        if end_date is None:
-            end_date = datetime.now(start_date.tzinfo) if start_date.tzinfo else datetime.now()
+        start_date = ensure_utc(start_date)
+        end_date = ensure_utc(end_date) if end_date is not None else utc_now()
 
         print(f"Date range: {start_date.strftime('%Y-%m-%d')} - {end_date.strftime('%Y-%m-%d')}")
         print("(Press Ctrl+C to stop; collected posts will be saved)\n")
@@ -1283,6 +1304,7 @@ class XScraper:
         scan_cycles = 0
         max_scan_cycles = 160
         reached_start_date = False
+        stop_tracker = DateRangeStopTracker(start_date, consecutive_old_required=3)
 
         try:
             while not reached_start_date:
@@ -1297,15 +1319,15 @@ class XScraper:
                     tweet = result
                     if tweet:
                         # Tarih kontrolü
-                        tweet_date = tweet.date.replace(tzinfo=None) if tweet.date.tzinfo else tweet.date
-                        start_date_naive = start_date.replace(tzinfo=None) if start_date.tzinfo else start_date
-                        end_date_naive = end_date.replace(tzinfo=None) if end_date.tzinfo else end_date
+                        if tweet.date is None:
+                            continue
+                        tweet_date = ensure_utc(tweet.date)
 
-                        if tweet_date < start_date_naive:
+                        if stop_tracker.observe(tweet_date, tweet.is_pinned):
                             reached_start_date = True
                             break
 
-                        if start_date_naive <= tweet_date <= end_date_naive:
+                        if start_date <= tweet_date <= end_date:
                             self.tweets_collected.append(tweet)
                             new_tweets_found = True
                             print(f"  [{len(self.tweets_collected)}] Post: {tweet.date_str}")
@@ -1388,7 +1410,7 @@ class XScraper:
         Returns:
             Tweet listesi
         """
-        end_date = datetime.now()
+        end_date = utc_now()
         start_date = end_date - timedelta(days=days)
         return self.scrape_by_date(start_date, end_date)
 

@@ -16,8 +16,16 @@ class FakeLink:
 
 
 class FakeTime:
-    def __init__(self, href):
+    def __init__(self, href, timestamp="2026-07-20T10:00:00Z"):
         self.href = href
+        self.timestamp = timestamp
+
+    @property
+    def text(self):
+        return "Jul 20"
+
+    def get_attribute(self, name):
+        return self.timestamp if name == "datetime" else None
 
     def find_element(self, by, selector):
         if by == By.XPATH and selector == "./ancestor::a":
