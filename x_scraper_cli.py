@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from chrome_auth import default_browser_profile, open_chrome_for_x_login
 from diagnostics import ScrapeRunLog, record_event, save_run_log
 from document_generator import (
     BASE_OUTPUT_DIR,
@@ -63,6 +64,13 @@ def build_parser() -> argparse.ArgumentParser:
     scrape.add_argument("--output-dir", help="base directory for exports")
     scrape.add_argument("--browser-profile", help="local Chrome profile directory to reuse")
     scrape.add_argument("--headless", action="store_true", help="run Chrome without a window")
+
+    login = subcommands.add_parser("login", help="prepare an X session in normal Chrome")
+    login.add_argument(
+        "--browser-profile",
+        default=default_browser_profile(),
+        help="local Chrome profile directory to prepare",
+    )
 
     diagnostics = subcommands.add_parser("diagnostics", help="check X selectors on a page")
     diagnostics.add_argument("--url", default="https://x.com/home", help="X page to inspect")
@@ -328,6 +336,9 @@ def run_cli(
         return int(exc.code)
 
     try:
+        if namespace.command == "login":
+            profile = _browser_profile(namespace.browser_profile)
+            return open_chrome_for_x_login(profile or default_browser_profile())
         if namespace.command == "scrape":
             request = request_from_namespace(namespace)
             return int((scrape_runner or run_cli_scrape)(request))

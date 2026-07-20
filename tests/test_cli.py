@@ -168,6 +168,17 @@ class CliRequestTests(unittest.TestCase):
 
         self.assertEqual(stream.getvalue(), "[OK] Ready\n")
 
+    def test_login_command_opens_a_normal_chrome_profile_without_scraping(self):
+        expected_profile = str((Path.cwd() / ".sessions" / "x-scraper").resolve())
+        with patch(
+            "x_scraper_cli.open_chrome_for_x_login",
+            create=True,
+            return_value=0,
+        ) as open_chrome:
+            self.assertEqual(run_cli(["login"]), 0)
+
+        open_chrome.assert_called_once_with(expected_profile)
+
     def test_legacy_diagnostics_flag_maps_to_the_diagnostics_command(self):
         observed_urls = []
 
