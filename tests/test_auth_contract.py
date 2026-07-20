@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from chrome_auth import authenticated_x_ui_present, is_prepared_profile
 from run_models import ExitCode
+from scraper import XScraper
 from x_scraper_cli import run_cli
 
 
@@ -18,9 +19,7 @@ class AuthDriver:
 
 def test_authenticated_x_ui_requires_destination_and_authenticated_ui():
     assert not authenticated_x_ui_present(AuthDriver("https://x.com/home", 0))
-    assert not authenticated_x_ui_present(
-        AuthDriver("https://x.com/i/flow/login", 1)
-    )
+    assert not authenticated_x_ui_present(AuthDriver("https://x.com/i/flow/login", 1))
     assert authenticated_x_ui_present(AuthDriver("https://x.com/home", 1))
 
 
@@ -47,3 +46,9 @@ def test_missing_default_profile_fails_before_scrape_runner_is_called():
 
     assert code == ExitCode.INVALID_INPUT
     assert called == []
+
+
+def test_scraper_has_no_legacy_password_login_api():
+    assert not hasattr(XScraper, "login")
+    assert not hasattr(XScraper, "_legacy_manual_login")
+    assert not hasattr(XScraper, "_human_type")

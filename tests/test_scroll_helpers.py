@@ -4,8 +4,8 @@ from unittest.mock import patch
 from selenium.common.exceptions import NoSuchElementException
 from selenium.webdriver.common.by import By
 
-from scraper import XScraper, SKIP_ALREADY_COLLECTED
 from diagnostics import ScrapeRunLog
+from scraper import SKIP_ALREADY_COLLECTED, XScraper
 
 
 class FakeLink:
@@ -79,7 +79,7 @@ class FakeTweetArticle:
             return []
         if by == By.XPATH and "tweetPhoto" in selector:
             return []
-        if by == By.XPATH and selector == './/video':
+        if by == By.XPATH and selector == ".//video":
             return []
         if by == By.CSS_SELECTOR and selector == '[data-testid="videoPlayer"]':
             return []
@@ -194,7 +194,9 @@ class ScrollHelperTests(unittest.TestCase):
         scraper = XScraper(headless=True, run_log=run_log)
         scraper.driver = None
 
-        scraper._record_partial_target_not_met("Count", collected=6, target=20, no_progress_cycles=8)
+        scraper._record_partial_target_not_met(
+            "Count", collected=6, target=20, no_progress_cycles=8
+        )
 
         self.assertEqual(run_log.events[-1].reason, "partial_target_not_met")
         self.assertEqual(run_log.events[-1].details["collected"], 6)
@@ -224,7 +226,9 @@ class ScrollHelperTests(unittest.TestCase):
         self.assertIsNotNone(tweet)
         self.assertNotEqual(tweet, SKIP_ALREADY_COLLECTED)
         self.assertFalse(tweet.has_article)
-        self.assertEqual(tweet.text, "writing an article on how i went from 0 to 100,000 followers in a year...")
+        self.assertEqual(
+            tweet.text, "writing an article on how i went from 0 to 100,000 followers in a year..."
+        )
 
     def test_article_label_outside_tweet_text_still_triggers_article_extraction(self):
         scraper = XScraper(headless=True)

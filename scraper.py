@@ -4,34 +4,35 @@ X (Twitter) Scraper - Selenium ile tweet toplama
 
 import random
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import List, Dict, Optional
-from dataclasses import dataclass
+from typing import Dict, List, Optional
 
 from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import (
-    TimeoutException,
     NoSuchElementException,
     NoSuchWindowException,
     StaleElementReferenceException,
+    TimeoutException,
     WebDriverException,
 )
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.common.keys import Keys
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.support.ui import WebDriverWait
+
+from chrome_auth import authenticated_x_ui_present
 from config import (
-    X_BASE_URL,
-    X_LOGIN_URL,
-    X_PROFILE_URL,
-    X_BOOKMARKS_URL,
+    CHROME_OPTIONS,
     IMPLICIT_WAIT,
     PAGE_LOAD_TIMEOUT,
-    SCROLL_PAUSE_MIN,
     SCROLL_PAUSE_MAX,
-    CHROME_OPTIONS,
+    SCROLL_PAUSE_MIN,
+    X_BASE_URL,
+    X_BOOKMARKS_URL,
+    X_PROFILE_URL,
     XPATHS,
 )
 from diagnostics import (
@@ -40,9 +41,7 @@ from diagnostics import (
     record_event,
     run_selector_diagnostics,
 )
-from chrome_auth import authenticated_x_ui_present
 from time_utils import DateRangeStopTracker, ensure_utc, parse_x_datetime, utc_now
-
 
 SKIP_ALREADY_COLLECTED = "SKIP_ALREADY_COLLECTED"
 
@@ -50,6 +49,7 @@ SKIP_ALREADY_COLLECTED = "SKIP_ALREADY_COLLECTED"
 @dataclass
 class Tweet:
     """Tweet veri yapısı"""
+
     id: str
     text: str
     date: Optional[datetime]
@@ -85,6 +85,7 @@ class XScraper:
             str(Path(browser_profile).expanduser().resolve()) if browser_profile else None
         )
         self.exclude_promotional_posts = exclude_promotional_posts
+        self.last_collection_complete = False
 
     def _setup_driver(self):
         """Chrome WebDriver'ı yapılandır ve başlat"""
@@ -149,150 +150,6 @@ class XScraper:
         add_diagnostics_to_log(self.run_log, diagnostics)
         return diagnostics
 
-    def login(self, username: str, password: str) -> bool:
-        """
-        X'e giriş yap
-
-        Args:
-            username: X kullanıcı adı veya email
-            password: Şifre
-
-        Returns:
-            Başarılı ise True
-        """
-        try:
-            print("Signing in to X...")
-            record_event(self.run_log, "login", "info", "Automatic login started")
-            self.driver.get(X_LOGIN_URL)
-
-            # Username girişi (sayfa yüklenene kadar bekle)
-            wait = WebDriverWait(self.driver, 20)
-            username_input = wait.until(
-                EC.presence_of_element_located((By.XPATH, XPATHS["username_input"]))
-            )
-            username_input.clear()
-            self._human_type(username_input, username)
-
-            # Next butonuna tıkla
-            next_buttons = self.driver.find_elements(By.XPATH, "//button[@role='button']")
-            for btn in next_buttons:
-                try:
-                    if "Next" in btn.text or "İleri" in btn.text:
-                        btn.click()
-                        break
-                except (StaleElementReferenceException, WebDriverException):
-                    continue
-            else:
-                username_input.send_keys(Keys.RETURN)
-
-            # Bazen ek doğrulama isteyebilir (telefon/email)
-            try:
-                verification_input = WebDriverWait(self.driver, 3).until(
-                    EC.presence_of_element_located((By.XPATH, '//input[@data-testid="ocfEnterTextTextInput"]'))
-                )
-                print("Additional verification is required. Enter your phone or email:")
-                verification_code = input("Verification code or information: ")
-                verification_input.clear()
-                self._human_type(verification_input, verification_code)
-                verification_input.send_keys(Keys.RETURN)
-            except TimeoutException:
-                pass
-
-            # Password girişi
-            password_input = wait.until(
-                EC.presence_of_element_located((By.XPATH, XPATHS["password_input"]))
-            )
-            password_input.clear()
-            self._human_type(password_input, password)
-
-            # Login butonuna tıkla
-            try:
-                login_btn = self.driver.find_element(By.XPATH, XPATHS["login_button"])
-                login_btn.click()
-            except (NoSuchElementException, WebDriverException):
-                password_input.send_keys(Keys.RETURN)
-
-            # Giriş başarılı olana kadar bekle (max 10 saniye)
-            try:
-                WebDriverWait(self.driver, 10).until(
-                    lambda d: "home" in d.current_url.lower() or
-                              ("x.com" in d.current_url and "login" not in d.current_url and "flow" not in d.current_url)
-                )
-                print("Sign-in completed.")
-                record_event(self.run_log, "login", "info", "Automatic login completed")
-                return True
-            except TimeoutException:
-                print("Checking sign-in status...")
-                record_event(
-                    self.run_log,
-                    "login",
-                    "warning",
-                    "Login success could not be confirmed by URL; continuing",
-                )
-                return True  # Devam etmeyi dene
-
-        except Exception as e:
-            print(f"Sign-in error: {e}")
-            record_event(
-                self.run_log,
-                "login",
-                "error",
-                f"Login failed: {e}",
-                reason="login_failed",
-            )
-            return False
-
-    def _legacy_manual_login(self) -> bool:
-        """
-        Manuel giriş - Kullanıcı kendisi giriş yapar (Google, Apple vs. için)
-
-        Returns:
-            Başarılı ise True
-        """
-        try:
-            record_event(self.run_log, "manual_login", "info", "Manual login started")
-            print("\n" + "=" * 50)
-            print("MANUEL GİRİŞ MODU")
-            print("=" * 50)
-            print("Browser açılacak. Lütfen X hesabınıza giriş yapın.")
-            print("Google, Apple veya normal şifre ile giriş yapabilirsiniz.")
-            print("Giriş yaptıktan sonra buraya dönüp ENTER'a basın.")
-            print("=" * 50 + "\n")
-
-            self.driver.get(X_LOGIN_URL)
-
-            input(">>> Giriş yaptıktan sonra ENTER'a basın...")
-
-            # Giriş kontrolü
-            time.sleep(0.5)
-            current_url = self.driver.current_url.lower()
-
-            if "home" in current_url or "x.com" in current_url:
-                if "login" not in current_url and "flow" not in current_url:
-                    print("Giriş başarılı!")
-                    record_event(self.run_log, "manual_login", "info", "Manual login confirmed")
-                    return True
-
-            print("Giriş yapılmış görünüyor, devam ediliyor...")
-            record_event(
-                self.run_log,
-                "manual_login",
-                "warning",
-                "Manual login confirmation was ambiguous; continuing",
-            )
-            return True
-
-        except Exception as e:
-            print(f"Manuel giriş hatası: {e}")
-            record_event(
-                self.run_log,
-                "manual_login",
-                "error",
-                f"Manual login failed: {e}",
-                reason="manual_login_timeout",
-            )
-            return False
-
     def manual_login(self) -> bool:
         """Confirm an X session without driving a third-party OAuth screen."""
         try:
@@ -319,7 +176,7 @@ class XScraper:
             print("[OK] Saved X session is ready.")
             record_event(self.run_log, "manual_login", "info", "Saved X session confirmed")
             return True
-        except Exception as exc:
+        except (NoSuchWindowException, TimeoutException, WebDriverException) as exc:
             print(f"[ERROR] Saved-session check failed: {exc}")
             record_event(
                 self.run_log,
@@ -329,12 +186,6 @@ class XScraper:
                 reason="manual_login_timeout",
             )
             return False
-
-    def _human_type(self, element, text: str):
-        """Hızlı ama insan benzeri yazma"""
-        for char in text:
-            element.send_keys(char)
-            time.sleep(random.uniform(0.02, 0.05))
 
     def navigate_to_profile(self, target_username: str) -> bool:
         """
@@ -385,7 +236,7 @@ class XScraper:
                 selector=XPATHS["tweet_article"],
             )
             return False
-        except Exception as e:
+        except (NoSuchWindowException, TimeoutException, WebDriverException) as e:
             print(f"Profile navigation error: {e}")
             record_event(
                 self.run_log,
@@ -441,7 +292,7 @@ class XScraper:
                 selector=XPATHS["tweet_article"],
             )
             return False
-        except Exception as e:
+        except (NoSuchWindowException, TimeoutException, WebDriverException) as e:
             print(f"Bookmarks navigation error: {e}")
             record_event(
                 self.run_log,
@@ -466,7 +317,9 @@ class XScraper:
             # Pinned / Reply kontrolü
             is_pinned = False
             try:
-                social_context = article.find_element(By.CSS_SELECTOR, '[data-testid="socialContext"]')
+                social_context = article.find_element(
+                    By.CSS_SELECTOR, '[data-testid="socialContext"]'
+                )
                 context_text = social_context.text.lower()
                 if "replying" in context_text:
                     return None  # Reply, atla
@@ -533,8 +386,10 @@ class XScraper:
             if not has_show_more:
                 try:
                     # "Show more" / "Daha fazla göster" text'i olan link
-                    show_more_links = article.find_elements(By.XPATH,
-                        './/a[contains(text(), "Show more") or contains(text(), "Daha fazla")]')
+                    show_more_links = article.find_elements(
+                        By.XPATH,
+                        './/a[contains(text(), "Show more") or contains(text(), "Daha fazla")]',
+                    )
                     if show_more_links:
                         has_show_more = True
                 except (StaleElementReferenceException, WebDriverException):
@@ -593,25 +448,19 @@ class XScraper:
             media_urls = []
             try:
                 # Resimler
-                images = article.find_elements(
-                    By.XPATH, './/*[@data-testid="tweetPhoto"]//img'
-                )
+                images = article.find_elements(By.XPATH, './/*[@data-testid="tweetPhoto"]//img')
                 for img in images:
                     src = img.get_attribute("src")
                     if src and "pbs.twimg.com/media" in src:
                         media_urls.append(src)
 
                 # Video thumbnail
-                videos = article.find_elements(
-                    By.XPATH, './/*[@data-testid="videoPlayer"]'
-                )
+                videos = article.find_elements(By.XPATH, './/*[@data-testid="videoPlayer"]')
                 if videos:
                     media_urls.append("[Video content]")
 
                 # GIF
-                gifs = article.find_elements(
-                    By.XPATH, './/video'
-                )
+                gifs = article.find_elements(By.XPATH, ".//video")
                 for gif in gifs:
                     poster = gif.get_attribute("poster")
                     if poster:
@@ -686,12 +535,11 @@ class XScraper:
                     return True
 
                 headings = card.find_elements(
-                    By.XPATH,
-                    './/span[string-length(normalize-space(text())) > 30]'
+                    By.XPATH, ".//span[string-length(normalize-space(text())) > 30]"
                 )
                 if headings:
                     return True
-        except Exception:
+        except (StaleElementReferenceException, WebDriverException):
             pass
 
         return False
@@ -711,7 +559,7 @@ class XScraper:
 
         try:
             # Yeni tab aç
-            self.driver.execute_script(f"window.open('{tweet_url}', '_blank');")
+            self.driver.execute_script("window.open(arguments[0], '_blank');", tweet_url)
 
             # Yeni tab'a geç
             self.driver.switch_to.window(self.driver.window_handles[-1])
@@ -723,7 +571,9 @@ class XScraper:
             wait = WebDriverWait(self.driver, 8)
             try:
                 text_element = wait.until(
-                    EC.visibility_of_element_located((By.XPATH, '//article[@data-testid="tweet"]//div[@data-testid="tweetText"]'))
+                    EC.visibility_of_element_located(
+                        (By.XPATH, '//article[@data-testid="tweet"]//div[@data-testid="tweetText"]')
+                    )
                 )
                 # Element görünür oldu, biraz daha bekle (lazy load için)
                 time.sleep(0.5)
@@ -731,16 +581,20 @@ class XScraper:
             except TimeoutException:
                 # Alternatif: tüm tweetText elementleri
                 try:
-                    text_elements = self.driver.find_elements(By.XPATH, '//*[@data-testid="tweetText"]')
+                    text_elements = self.driver.find_elements(
+                        By.XPATH, '//*[@data-testid="tweetText"]'
+                    )
                     if text_elements:
                         # İlk elementi görünür yap
-                        self.driver.execute_script("arguments[0].scrollIntoView(true);", text_elements[0])
+                        self.driver.execute_script(
+                            "arguments[0].scrollIntoView(true);", text_elements[0]
+                        )
                         time.sleep(0.5)
                         text = text_elements[0].text
                 except (StaleElementReferenceException, WebDriverException):
                     pass
 
-        except Exception as e:
+        except (NoSuchWindowException, TimeoutException, WebDriverException) as e:
             print(f"    [!] Error: {str(e)[:30]}")
             record_event(
                 self.run_log,
@@ -778,7 +632,7 @@ class XScraper:
         main_window = self.driver.current_window_handle
 
         try:
-            self.driver.execute_script(f"window.open('{tweet_url}', '_blank');")
+            self.driver.execute_script("window.open(arguments[0], '_blank');", tweet_url)
             self.driver.switch_to.window(self.driver.window_handles[-1])
             time.sleep(3)
 
@@ -787,7 +641,9 @@ class XScraper:
             for _ in range(20):
                 self.driver.execute_script("window.scrollBy(0, 1000);")
                 time.sleep(0.5)
-                new_height = self.driver.execute_script("return document.documentElement.scrollHeight")
+                new_height = self.driver.execute_script(
+                    "return document.documentElement.scrollHeight"
+                )
                 if new_height == last_height:
                     break
                 last_height = new_height
@@ -797,37 +653,63 @@ class XScraper:
 
             # Tüm sayfa text'ini al
             page_text = self.driver.execute_script("return document.body.innerText;")
-            lines = page_text.split('\n')
+            lines = page_text.split("\n")
 
             skip_patterns = [
-                'home', 'explore', 'notifications', 'messages', 'grok',
-                'premium', 'profile', 'more', 'post', 'subscribe',
-                'follow', 'following', 'followers', 'likes', 'bookmark', 'share',
-                'reply', 'repost', 'quote', 'view', 'show', 'hide',
-                'keyboard shortcuts', 'article', 'conversation',
-                'relevant people', 'terms of service', 'privacy policy',
-                '© 2', 'log out', 'settings', 'trending',
-                'reposted', 'liked', 'joined', 'posts', 'replies', 'media',
+                "home",
+                "explore",
+                "notifications",
+                "messages",
+                "grok",
+                "premium",
+                "profile",
+                "more",
+                "post",
+                "subscribe",
+                "follow",
+                "following",
+                "followers",
+                "likes",
+                "bookmark",
+                "share",
+                "reply",
+                "repost",
+                "quote",
+                "view",
+                "show",
+                "hide",
+                "keyboard shortcuts",
+                "article",
+                "conversation",
+                "relevant people",
+                "terms of service",
+                "privacy policy",
+                "© 2",
+                "log out",
+                "settings",
+                "trending",
+                "reposted",
+                "liked",
+                "joined",
+                "posts",
+                "replies",
+                "media",
             ]
-
-            collecting = False
 
             for line in lines:
                 line = line.strip()
                 if not line or len(line) < 40:
-                    if ' – ' in line:
+                    if " – " in line:
                         content_parts.append(f"\n## {line}\n")
-                        collecting = True
                     continue
 
                 line_lower = line.lower()
                 if any(skip in line_lower for skip in skip_patterns):
                     continue
-                if line.startswith('@'):
+                if line.startswith("@"):
                     continue
 
                 if len(line) > 60:
-                    collecting = True
                     if line not in content_parts:
                         content_parts.append(line)
 
@@ -844,7 +726,7 @@ class XScraper:
                 )
             return result
 
-        except Exception as e:
+        except (NoSuchWindowException, TimeoutException, WebDriverException) as e:
             print(f"    [!] Article error: {str(e)[:50]}")
             record_event(
                 self.run_log,
@@ -916,7 +798,9 @@ class XScraper:
         """DOM ve scroll durumunu tek yerde ölç."""
         articles = self.driver.find_elements(By.XPATH, XPATHS["tweet_article"])
         try:
-            scroll_y = int(self.driver.execute_script("return Math.round(window.scrollY || 0);") or 0)
+            scroll_y = int(
+                self.driver.execute_script("return Math.round(window.scrollY || 0);") or 0
+            )
             scroll_height = int(
                 self.driver.execute_script(
                     "return Math.round(document.documentElement.scrollHeight || document.body.scrollHeight || 0);"
@@ -924,10 +808,12 @@ class XScraper:
                 or 0
             )
             viewport_height = int(
-                self.driver.execute_script("return Math.round(window.innerHeight || document.documentElement.clientHeight || 0);")
+                self.driver.execute_script(
+                    "return Math.round(window.innerHeight || document.documentElement.clientHeight || 0);"
+                )
                 or 0
             )
-        except Exception:
+        except (TypeError, ValueError, WebDriverException):
             scroll_y = 0
             scroll_height = 0
             viewport_height = 0
@@ -960,6 +846,8 @@ class XScraper:
 
     def _timeline_end_distance(self) -> Optional[int]:
         """Viewport'un document bottom'a yaklaşık mesafesi."""
+        if self.driver is None:
+            return None
         try:
             value = self.driver.execute_script(
                 """
@@ -970,25 +858,35 @@ class XScraper:
                 """
             )
             return int(value)
-        except Exception:
+        except (TypeError, ValueError, WebDriverException):
             return None
 
     def _classify_visible_timeline_issue(self) -> Optional[str]:
         """Basit body text sinyallerinden neden ayrımı yap."""
+        if self.driver is None:
+            return None
         try:
             body_text = self.driver.find_element(By.TAG_NAME, "body").text.lower()
-        except Exception:
+        except WebDriverException:
             return None
 
         if any(text in body_text for text in ("log in", "sign in", "giriş yap", "oturum aç")):
             return "login_failed"
-        if any(text in body_text for text in ("rate limit", "try again later", "bir süre sonra tekrar dene")):
+        if any(
+            text in body_text
+            for text in ("rate limit", "try again later", "bir süre sonra tekrar dene")
+        ):
             return "timeline_stalled"
-        if any(text in body_text for text in ("these posts are protected", "account suspended", "this account doesn")):
+        if any(
+            text in body_text
+            for text in ("these posts are protected", "account suspended", "this account doesn")
+        ):
             return "profile_navigation_failed"
         return None
 
-    def _record_partial_target_not_met(self, label: str, collected: int, target: Optional[int], no_progress_cycles: int) -> None:
+    def _record_partial_target_not_met(
+        self, label: str, collected: int, target: Optional[int], no_progress_cycles: int
+    ) -> None:
         if not target or collected >= target:
             return
 
@@ -1013,15 +911,18 @@ class XScraper:
         """Mevcut DOM article elementlerinden tweet ID'lerini hızlı çıkar."""
         ids = set()
         for article in articles:
+            find_element = getattr(article, "find_element", None)
+            if not callable(find_element):
+                continue
             try:
-                time_element = article.find_element(By.TAG_NAME, "time")
+                time_element = find_element(By.TAG_NAME, "time")
                 parent_link = time_element.find_element(By.XPATH, "./ancestor::a")
                 href = parent_link.get_attribute("href")
                 if href and "/status/" in href:
                     tweet_id = href.split("/status/")[-1].split("?")[0].split("/")[0]
                     if tweet_id:
                         ids.add(tweet_id)
-            except Exception:
+            except (StaleElementReferenceException, WebDriverException):
                 continue
         return ids
 
@@ -1031,7 +932,7 @@ class XScraper:
             body = self.driver.find_element(By.TAG_NAME, "body")
             body.click()
             time.sleep(0.2)
-        except Exception:
+        except WebDriverException:
             pass
 
         for intensity in (2, 3, 4, 5):
@@ -1056,6 +957,7 @@ class XScraper:
         print(f"Collecting {count} posts...")
         print("(Press Ctrl+C to stop; collected posts will be saved)\n")
         self.tweets_collected = []  # Instance variable olarak sakla
+        self.last_collection_complete = False
         no_progress_count = 0
         no_new_collected_count = 0
         recovery_attempts = 0
@@ -1087,7 +989,9 @@ class XScraper:
                     self.tweets_collected.append(tweet)
                     article_tag = " [ARTICLE]" if tweet.has_article else ""
                     show_more_tag = " [SHOW MORE]" if tweet.needs_full_text else ""
-                    print(f"  [{len(self.tweets_collected)}/{count}] Post collected: {tweet.date_str}{article_tag}{show_more_tag}")
+                    print(
+                        f"  [{len(self.tweets_collected)}/{count}] Post collected: {tweet.date_str}{article_tag}{show_more_tag}"
+                    )
 
                 collected_after = len(self.tweets_collected)
                 if collected_after >= count:
@@ -1105,12 +1009,11 @@ class XScraper:
                     else:
                         no_progress_count += 1
 
-                if (
-                    no_progress_count in (2, 4, 6)
-                    and recovery_attempts < max_recovery_attempts
-                ):
+                if no_progress_count in (2, 4, 6) and recovery_attempts < max_recovery_attempts:
                     recovery_attempts += 1
-                    print(f"Timeline appears stalled; attempting scroll recovery ({recovery_attempts}/{max_recovery_attempts})...")
+                    print(
+                        f"Timeline appears stalled; attempting scroll recovery ({recovery_attempts}/{max_recovery_attempts})..."
+                    )
                     record_event(
                         self.run_log,
                         "timeline_loading",
@@ -1126,13 +1029,17 @@ class XScraper:
                     self._scroll_recovery()
 
                 if no_new_collected_count >= max_no_new_collected:
-                    print(f"No new posts were parsed after {max_no_new_collected} passes. Stopping with partial results.")
+                    print(
+                        f"No new posts were parsed after {max_no_new_collected} passes. Stopping with partial results."
+                    )
                     record_event(
                         self.run_log,
                         "timeline_loading",
                         "warning",
                         "Timeline advanced or scanned but produced no new parsed tweets",
-                        reason="timeline_empty" if not self.tweets_collected else "partial_target_not_met",
+                        reason="timeline_empty"
+                        if not self.tweets_collected
+                        else "partial_target_not_met",
                         collected=len(self.tweets_collected),
                         target=count,
                         no_new_collected_cycles=no_new_collected_count,
@@ -1142,13 +1049,17 @@ class XScraper:
                     break
 
                 if no_progress_count >= max_no_progress:
-                    print(f"Timeline did not advance after {max_no_progress} attempts. Stopping with partial results.")
+                    print(
+                        f"Timeline did not advance after {max_no_progress} attempts. Stopping with partial results."
+                    )
                     record_event(
                         self.run_log,
                         "timeline_loading",
                         "warning",
                         "Timeline stopped advancing after recovery attempts",
-                        reason="timeline_empty" if not self.tweets_collected else "timeline_stalled",
+                        reason="timeline_empty"
+                        if not self.tweets_collected
+                        else "timeline_stalled",
                         collected=len(self.tweets_collected),
                         target=count,
                         no_progress_cycles=no_progress_count,
@@ -1177,7 +1088,9 @@ class XScraper:
             raise  # Ana programa ilet
         except NoSuchWindowException as e:
             browser_lost = True
-            print(f"\nBrowser window closed or Chrome disconnected. {len(self.tweets_collected)} posts will be used as partial results.")
+            print(
+                f"\nBrowser window closed or Chrome disconnected. {len(self.tweets_collected)} posts will be used as partial results."
+            )
             record_event(
                 self.run_log,
                 "browser",
@@ -1189,10 +1102,15 @@ class XScraper:
                 scan_cycles=scan_cycles,
             )
         except WebDriverException as e:
-            if "no such window" not in str(e).lower() and "web view not found" not in str(e).lower():
+            if (
+                "no such window" not in str(e).lower()
+                and "web view not found" not in str(e).lower()
+            ):
                 raise
             browser_lost = True
-            print(f"\nChrome web view disappeared. {len(self.tweets_collected)} posts will be used as partial results.")
+            print(
+                f"\nChrome web view disappeared. {len(self.tweets_collected)} posts will be used as partial results."
+            )
             record_event(
                 self.run_log,
                 "browser",
@@ -1211,6 +1129,7 @@ class XScraper:
             self._process_show_more_tweets()
 
         print(f"Collected {len(self.tweets_collected)} posts in total.")
+        self.last_collection_complete = len(self.tweets_collected) >= count
         if not self.tweets_collected:
             record_event(
                 self.run_log,
@@ -1237,7 +1156,9 @@ class XScraper:
         if total == 0:
             return
 
-        print(f"\nRetrieving {total} long-form items ({len(show_more_tweets)} show more, {len(article_tweets)} articles)...")
+        print(
+            f"\nRetrieving {total} long-form items ({len(show_more_tweets)} show more, {len(article_tweets)} articles)..."
+        )
         current = 0
 
         for tweet in show_more_tweets:
@@ -1248,7 +1169,7 @@ class XScraper:
                 if full_text:
                     tweet.text = full_text
                     tweet.needs_full_text = False
-            except Exception as e:
+            except (NoSuchWindowException, TimeoutException, WebDriverException) as e:
                 print(f"    [!] Error: {str(e)[:30]}")
 
         for tweet in article_tweets:
@@ -1258,14 +1179,16 @@ class XScraper:
                 article_content = self._get_article_content(tweet.tweet_url)
                 if article_content:
                     if tweet.text:
-                        tweet.text = tweet.text + "\n\n--- ARTICLE CONTENT ---\n\n" + article_content
+                        tweet.text = (
+                            tweet.text + "\n\n--- ARTICLE CONTENT ---\n\n" + article_content
+                        )
                     else:
                         tweet.text = article_content
                     tweet.has_article = False
                     print(f"    [OK] Retrieved {len(article_content)} characters")
                 else:
                     print("    [WARN] Article content could not be retrieved")
-            except Exception as e:
+            except (NoSuchWindowException, TimeoutException, WebDriverException) as e:
                 print(f"    [!] Error: {str(e)[:50]}")
 
         print("Full content retrieval completed.\n")
@@ -1289,6 +1212,7 @@ class XScraper:
         print(f"Date range: {start_date.strftime('%Y-%m-%d')} - {end_date.strftime('%Y-%m-%d')}")
         print("(Press Ctrl+C to stop; collected posts will be saved)\n")
         self.tweets_collected = []
+        self.last_collection_complete = False
         no_progress_count = 0
         max_no_progress = 8
         scan_cycles = 0
@@ -1352,7 +1276,9 @@ class XScraper:
                         "timeline_loading",
                         "warning",
                         "Timeline stopped advancing before date scrape completed",
-                        reason="timeline_empty" if not self.tweets_collected else "timeline_stalled",
+                        reason="timeline_empty"
+                        if not self.tweets_collected
+                        else "timeline_stalled",
                         collected=len(self.tweets_collected),
                         no_progress_cycles=no_progress_count,
                         scan_cycles=scan_cycles,
@@ -1380,6 +1306,15 @@ class XScraper:
         self._process_show_more_tweets()
 
         print(f"Collected {len(self.tweets_collected)} posts in total.")
+        if reached_start_date:
+            self.last_collection_complete = True
+        else:
+            end_distance = self._timeline_end_distance()
+            self.last_collection_complete = (
+                end_distance is not None
+                and end_distance <= 100
+                and self._classify_visible_timeline_issue() is None
+            )
         if not self.tweets_collected:
             record_event(
                 self.run_log,
@@ -1422,6 +1357,7 @@ class XScraper:
         print("(Press Ctrl+C to stop; collected posts will be saved)\n")
 
         self.tweets_collected = []
+        self.last_collection_complete = False
         no_progress_count = 0
         max_no_progress = 8
         scan_cycles = 0
@@ -1451,9 +1387,13 @@ class XScraper:
                     article_tag = " [ARTICLE]" if tweet.has_article else ""
                     show_more_tag = " [SHOW MORE]" if tweet.needs_full_text else ""
                     if count:
-                        print(f"  [{len(self.tweets_collected)}/{count}] Bookmark collected: {tweet.date_str}{article_tag}{show_more_tag}")
+                        print(
+                            f"  [{len(self.tweets_collected)}/{count}] Bookmark collected: {tweet.date_str}{article_tag}{show_more_tag}"
+                        )
                     else:
-                        print(f"  [{len(self.tweets_collected)}] Bookmark collected: {tweet.date_str}{article_tag}{show_more_tag}")
+                        print(
+                            f"  [{len(self.tweets_collected)}] Bookmark collected: {tweet.date_str}{article_tag}{show_more_tag}"
+                        )
 
                 if not get_all and count and len(self.tweets_collected) >= count:
                     break
@@ -1486,7 +1426,9 @@ class XScraper:
                         "timeline_loading",
                         "warning",
                         "Bookmarks timeline stopped advancing",
-                        reason="timeline_empty" if not self.tweets_collected else "timeline_stalled",
+                        reason="timeline_empty"
+                        if not self.tweets_collected
+                        else "timeline_stalled",
                         collected=len(self.tweets_collected),
                         target=count,
                         no_progress_cycles=no_progress_count,
@@ -1516,6 +1458,15 @@ class XScraper:
         self._process_show_more_tweets()
 
         print(f"Collected {len(self.tweets_collected)} bookmarks in total.")
+        if count:
+            self.last_collection_complete = len(self.tweets_collected) >= count
+        elif get_all:
+            end_distance = self._timeline_end_distance()
+            self.last_collection_complete = (
+                end_distance is not None
+                and end_distance <= 100
+                and self._classify_visible_timeline_issue() is None
+            )
         if not self.tweets_collected:
             record_event(
                 self.run_log,

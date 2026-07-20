@@ -80,7 +80,9 @@ class DiagnosticsTests(unittest.TestCase):
         self.assertIn("[REDACTED]", serialized)
 
     def test_run_log_serializes_failure_reason_details(self):
-        run_log = ScrapeRunLog(target="@Example", scrape_type="profile", mode="count", run_id="abc123")
+        run_log = ScrapeRunLog(
+            target="@Example", scrape_type="profile", mode="count", run_id="abc123"
+        )
         event = record_event(
             run_log,
             "profile_navigation",
@@ -94,7 +96,10 @@ class DiagnosticsTests(unittest.TestCase):
         payload = run_log.to_dict()
         self.assertEqual(payload["schema_version"], RUN_LOG_SCHEMA_VERSION)
         self.assertEqual(payload["failure_reason"], "profile_navigation_failed")
-        self.assertEqual(payload["events"][0]["reason_detail"], "The profile page did not expose tweet timeline selectors.")
+        self.assertEqual(
+            payload["events"][0]["reason_detail"],
+            "The profile page did not expose tweet timeline selectors.",
+        )
 
     def test_selector_diagnostics_reports_required_missing(self):
         checks = [
@@ -155,7 +160,9 @@ class DiagnosticsTests(unittest.TestCase):
 
     def test_empty_result_classification(self):
         self.assertEqual(classify_empty_result("profile"), "timeline_empty")
-        self.assertEqual(classify_empty_result("bookmarks", navigated=False), "bookmarks_navigation_failed")
+        self.assertEqual(
+            classify_empty_result("bookmarks", navigated=False), "bookmarks_navigation_failed"
+        )
 
 
 if __name__ == "__main__":

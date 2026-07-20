@@ -1,10 +1,12 @@
-import unittest
 import os
+import subprocess
+import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from selenium.common.exceptions import TimeoutException
+
 
 class ChromeAuthTests(unittest.TestCase):
     def test_linux_discovery_accepts_google_chrome_and_chromium(self):
@@ -35,6 +37,22 @@ class ChromeAuthTests(unittest.TestCase):
             found,
             r"C:\Program Files\Google\Chrome\Application\chrome.exe",
         )
+
+    def test_macos_discovery_checks_the_standard_application_bundle(self):
+        from chrome_auth import find_chrome_executable
+
+        with (
+            patch("chrome_auth.sys.platform", "darwin"),
+            patch("chrome_auth.shutil.which", return_value=None),
+            patch("chrome_auth.Path.is_file", return_value=True),
+        ):
+            found = find_chrome_executable()
+
+        self.assertEqual(
+            found.replace("\\", "/"),
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        )
+
     def test_normal_chrome_login_uses_an_isolated_profile(self):
         from chrome_auth import open_chrome_for_x_login
 
@@ -42,7 +60,10 @@ class ChromeAuthTests(unittest.TestCase):
             profile = str(Path(temporary_directory) / "x-scraper")
             with (
                 patch("chrome_auth.find_chrome_executable", return_value="chrome.exe"),
-                patch("chrome_auth.subprocess.run") as run,
+                patch(
+                    "chrome_auth.subprocess.run",
+                    return_value=subprocess.CompletedProcess([], 0),
+                ) as run,
             ):
                 self.assertEqual(open_chrome_for_x_login(profile), 0)
 
@@ -51,6 +72,20 @@ class ChromeAuthTests(unittest.TestCase):
         self.assertIn(f"--user-data-dir={profile}", command)
         self.assertIn("--disable-background-mode", command)
         self.assertIn("https://x.com/i/flow/login", command)
+        self.assertNotIn("shell", run.call_args.kwargs)
+
+    def test_normal_chrome_login_reports_a_nonzero_process_exit(self):
+        from chrome_auth import open_chrome_for_x_login
+
+        with TemporaryDirectory() as temporary_directory:
+            with (
+                patch("chrome_auth.find_chrome_executable", return_value="chrome.exe"),
+                patch(
+                    "chrome_auth.subprocess.run",
+                    return_value=subprocess.CompletedProcess([], 7),
+                ),
+            ):
+                self.assertEqual(open_chrome_for_x_login(temporary_directory), 1)
 
     def test_manual_login_refuses_google_oauth_in_a_webdriver_window(self):
         from scraper import XScraper

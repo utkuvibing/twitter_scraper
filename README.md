@@ -1,125 +1,190 @@
-# X Scraper CLI
+# x-scraper
 
-`x-scraper` is a Python/Selenium command-line tool for personal, authorized X/Twitter archiving. It collects public profile posts or the signed-in user's bookmarks and exports them as JSON, CSV, Markdown, or DOCX.
+`x-scraper` is a local Python CLI for archiving public X profile posts and the signed-in user's bookmarks through an authorized Chrome session. It exports JSON, CSV, Markdown, or DOCX and writes a structured run log beside every target archive.
 
-The project automates the X web UI; it does not use a private API, bypass access controls, work around rate limits, or store credentials. X can change its UI at any time, so treat every scrape as best-effort and verify important exports.
+This project automates X's normal web interface. It does not bypass access controls, CAPTCHAs, rate limits, or browser security. X can change its interface without notice, so review important archives and run selector diagnostics when collection behavior changes.
+
+> Release status: `1.0.0b1` (Beta). Browser-free automated checks cover Python 3.11-3.13 on Windows, macOS, and Linux. The live-X checks in [the release checklist](docs/RELEASE_CHECKLIST.md) must pass before publishing a stable `1.0.0` tag.
 
 ## Requirements
 
-- Python 3.11 or newer
-- A current Chrome installation
-- An X account only when using bookmarks or a local authenticated browser profile
-
-Windows, macOS, and Linux are supported where Chrome and ChromeDriver are available. `webdriver-manager` retrieves a compatible driver during the first browser run.
+- Python 3.11, 3.12, or 3.13
+- Google Chrome, or Chromium on Linux
+- Network access on the first browser run if Selenium Manager needs to obtain a compatible ChromeDriver
+- An X account and an authorized local session, including for bookmarks and headless runs
 
 ## Install
+
+From a source checkout:
 
 ```bash
 git clone https://github.com/utkuvibing/twitter_scraper.git
 cd twitter_scraper
-python -m pip install --upgrade pip
 python -m pip install .
 x-scraper --help
 ```
 
-To run directly from a source checkout, use `python main.py` instead of `x-scraper`.
-
-## Quick start
-
-Run without arguments for the English interactive wizard. It guides you through the source, collection range, and export format.
+From a built wheel:
 
 ```bash
-x-scraper
+python -m pip install dist/x_scraper_cli-1.0.0b1-py3-none-any.whl
+x-scraper --version
 ```
 
-For Google or Apple X accounts, prepare the session once in normal Chrome. This Chrome window is not controlled by Selenium, so complete your login there and close it when finished.
+Windows users may also run `x-scraper.cmd` from a source checkout. It creates `.venv`, installs the project once when required, and then runs the same Python entry point. The installed `x-scraper` console command is preferred for normal use.
+
+## 1. Prepare an authorized session
 
 ```bash
 x-scraper login
 ```
 
-For repeatable scripts, use the non-interactive command with that saved browser profile.
+This opens normal Chrome with an isolated profile below `.sessions/x-scraper` in the current directory. Sign in directly on X, then close that Chrome window. The application does not receive or store your password. Chrome stores its normal local profile data, including session cookies, inside that isolated directory; keep it private and never commit or share it.
+
+To use a different isolated profile:
 
 ```bash
-# Archive 50 public posts as JSON.
-x-scraper scrape --profile example --count 50 --format json --browser-profile .sessions/x-scraper
-
-# Archive posts from the last 7 days as CSV in a chosen output directory.
-x-scraper scrape --profile example --days 7 --format csv --output-dir exports --browser-profile .sessions/x-scraper
-
-# Archive a date range as Markdown.
-x-scraper scrape --profile example --from 2026-07-01 --to 2026-07-20 --format md --browser-profile .sessions/x-scraper
-
-# Archive the current account's bookmarks.
-x-scraper scrape --bookmarks --count 100 --format docx --browser-profile .sessions/x-scraper
+x-scraper login --browser-profile "C:\private\x-scraper-profile"
 ```
 
-Exactly one source (`--profile` or `--bookmarks`) and one collection mode (`--count`, `--days`, or `--from` plus `--to`) are required. Handles, dates, limits, output formats, and diagnostics URLs are checked before Chrome starts.
+A scrape checks for Chrome profile artifacts before WebDriver starts. It then confirms both an authenticated X destination and signed-in X navigation/account UI. URL redirection alone is not treated as proof of authentication.
 
-## Reusing an authorized Chrome profile
+## 2. Archive content
 
-Use `--browser-profile` only for a local Chrome profile directory you control. Create it with `x-scraper login`, which opens normal Chrome and lets you sign in yourself. The profile may contain account session data: keep it private and never commit or share it.
+Run the English interactive wizard:
 
 ```bash
-# First run: normal Chrome opens; sign in to X and close Chrome when finished.
-x-scraper login --browser-profile .sessions/x-scraper
-
-# Later: reuse the same authorized profile without opening a window.
-x-scraper scrape --profile example --count 10 --headless --browser-profile .sessions/x-scraper
+x-scraper
 ```
 
-Google and Apple sign-in are intentionally not available in the Selenium window. Headless mode rejects a missing profile directory to avoid launching a new unauthenticated session. The CLI does not accept passwords as arguments and does not write credentials to exports or run logs.
+Or use repeatable commands. The documented default isolated profile is selected automatically:
 
-## Exports and run logs
+```bash
+# Exactly 50 public profile posts as JSON
+x-scraper scrape --profile example --count 50 --format json
 
-Exports are written to `output/<target>/` by default, or below `--output-dir` when supplied. Filenames and target folders are sanitized and writes are atomic.
+# Profile posts from the last seven days as CSV
+x-scraper scrape --profile example --days 7 --format csv
 
-- JSON: versioned schema (`schema_version: "0.2"`) for programmatic use
-- CSV: UTF-8 with BOM for spreadsheet applications
-- Markdown: readable archive with links
-- DOCX: Word document archive
+# Inclusive UTC date range as Markdown
+x-scraper scrape --profile example --from 2026-07-01 --to 2026-07-20 --format md
 
-Every scrape and diagnostics run also writes a structured JSON log to `output/<target>/logs/`. Logs record stages, selector diagnostics, timings, failure reasons, and export paths; they do not contain credentials or browser-profile paths.
+# The signed-in account's bookmarks
+x-scraper scrape --bookmarks --count 100 --format docx
 
-The CLI returns `0` for a completed export, `1` for a login/runtime/export error, and `2` when validation fails or no posts are collected.
+# Reuse the prepared profile without displaying Chrome
+x-scraper scrape --profile example --count 10 --headless
+```
+
+Exactly one source (`--profile` or `--bookmarks`) and one range (`--count`, `--days`, or `--from` plus `--to`) are required. Handles use X's 1-15 character letter/number/underscore format. Count is limited to 10,000 and days to 3,650. Output filenames cannot contain directories.
+
+Use `--output-dir` to select another writable base directory, `--output` to select a filename, and `--browser-profile` to select another prepared isolated profile.
+
+### Optional promotional filter
+
+Archives preserve promotional language by default. To explicitly exclude posts containing a case-insensitive match for `link in bio`, `telegram`, `newsletter`, `free prompts`, `join my`, or `subscribe`, add:
+
+```bash
+x-scraper scrape --profile example --count 100 --exclude-promotional-posts
+```
+
+This filter can remove legitimate posts. Do not enable it when completeness is more important than topical filtering.
+
+## Outputs and local paths
+
+```bash
+x-scraper paths
+```
+
+The default export root is the current working directory's `output` folder, never the installed package or `site-packages` directory:
+
+```text
+output/<target>/<filename>
+output/<target>/logs/<run-id>_<status>_run_log.json
+```
+
+Writes use a same-directory temporary file followed by atomic replacement. Target and filename segments are sanitized for Windows, macOS, and Linux. Scraped content cannot select an output path. `--output-dir` is an explicit user-selected base directory.
+
+### JSON schema 1.0
+
+JSON preserves the original scraped text and emits UTC-aware ISO-8601 dates. A missing timestamp is represented as `null`; it is never replaced with the current time.
+
+Each tweet contains:
+
+```text
+id, text, date, date_str, url, tweet_url, has_media, media_urls,
+has_article, needs_full_text
+```
+
+Media URLs are validated, deduplicated, and kept in first-seen order. Engagement counters are intentionally absent because the scraper does not collect them reliably.
+
+CSV uses the same supported fields, UTF-8 with BOM, and prefixes text cells beginning with `=`, `+`, `-`, or `@` so spreadsheet software does not execute archive content as a formula. JSON remains unchanged. Markdown renders tweet text as blockquotes so archived headings and links do not alter the document structure.
+
+## Run outcomes and exit codes
+
+Console output, the run log's `status`/`exit_code`, and the process exit code follow one contract:
+
+| Exit | Status | Meaning |
+|---:|---|---|
+| `0` | `completed` | The requested count or chronological boundary was fully reached and exported. |
+| `1` | `failed` | Authentication, browser startup/navigation, runtime, or export failed. |
+| `2` | `invalid_input` or `failed` | Input was rejected before Chrome, or zero usable posts were collected. |
+| `3` | `partial` | Usable posts were saved, but the requested target was not reached. |
+| `130` | `cancelled` | Ctrl+C interrupted the run; collected posts were saved when possible. |
+
+Requesting 100 posts and receiving 12 is not success: the export is retained, the run is `partial`, and the command exits 3. Date-filtered modes visibly exclude posts whose timestamp is unavailable while count archives retain them with `date: null`.
 
 ## Selector diagnostics
-
-Run diagnostics when X changes its UI or a scrape returns no results:
 
 ```bash
 x-scraper diagnostics --url https://x.com/home
 ```
 
-Diagnostics only accepts HTTPS X/Twitter URLs and reports whether core selectors are visible on the page. It does not guarantee that a full scrape will succeed. The former `python main.py --diagnostics` command remains supported.
+Diagnostics only accepts HTTPS URLs on `x.com` or `twitter.com`, with no embedded credentials or custom port. It reports selector presence; it does not dump page source or private page content. A passing selector check does not guarantee that X will allow or complete a long scrape.
+
+## Troubleshooting
+
+- **`x-scraper` is not recognized:** activate the environment where the package was installed, reinstall with `python -m pip install .`, or use `python main.py --help` from the checkout.
+- **No prepared session:** run `x-scraper login` from the same working directory, finish X sign-in in the dedicated Chrome window, close it, and retry.
+- **Session check fails after Chrome opens:** run `x-scraper login` again. Confirm the dedicated profile shows signed-in Home navigation before closing it.
+- **Chrome cannot start:** install/update Chrome. If Selenium Manager is downloading ChromeDriver, confirm network and proxy settings allow it.
+- **Collection stalls or returns partial:** preserve the partial export, run diagnostics, and check `output/<target>/logs/` for the classified reason. X may have reached the end, rate-limited the session, or changed selectors.
+- **Headless fails while visible mode works:** refresh the prepared session in normal Chrome and retry visible mode before headless mode.
+- **Windows launcher installs repeatedly:** update the checkout. The launcher dependency probe must import `selenium` and `docx`; it does not require `python-dotenv`.
+
+Run logs redact registered browser-profile paths and sensitive token/cookie/password fields. They may contain public target handles, post URLs, selector names, counts, output paths, and concise exception diagnostics.
 
 ## Development and release checks
 
 ```bash
-python -m pytest
-python -m compileall main.py x_scraper_cli.py scraper.py document_generator.py export_schema.py diagnostics.py config.py
-python main.py --help
-python main.py --version
+python -m pip install ".[dev]"
+python -m pytest -q
+python -m ruff check .
+python -m ruff format --check .
+python -m mypy
 python -m build
+python -m twine check dist/*
+python scripts/wheel_smoke.py
+pip-audit -r requirements.txt
 ```
 
-GitHub Actions runs the unit suite, compile check, package build, and clean-environment console-command smoke test on Python 3.11 and 3.12.
+GitHub Actions runs these gates on Ubuntu, Windows, and macOS with Python 3.11, 3.12, and 3.13, plus a gitleaks secret scan. Automated CI does not use a live X account.
 
-## Project structure
+## Known limitations
 
-```text
-main.py                 Interactive compatibility entry point
-x_scraper_cli.py        Validated non-interactive command layer
-scraper.py              Selenium extraction and browser setup
-document_generator.py   JSON, CSV, Markdown, and DOCX writers
-export_schema.py        Versioned JSON schema and safe atomic file helpers
-diagnostics.py          Selector checks and structured run logs
-tests/                  Browser-free validation suite
-```
+- X's private web UI and selectors are not a stable API.
+- Protected, suspended, deleted, unavailable, or access-restricted posts cannot be archived unless the authorized session can normally view them.
+- Reposts and replies are excluded from profile archives; quoted content remains part of the containing post text/card and is not emitted as a separate post.
+- The tool records media URLs but does not download media files.
+- X Articles and expanded long posts require additional page navigation and may remain flagged when extraction fails.
+- Bookmark date modes must scroll the authorized account's bookmark timeline before local filtering and can finish partially if the timeline stalls.
+- Engagement counts are not part of schema 1.0.
 
-## Responsible use
+## Responsible use and privacy
 
-Use this project only for content and accounts you are authorized to access, and comply with X's terms, applicable law, and privacy obligations. Do not use it to evade access controls, collect private data, or mass-harvest content.
+Use `x-scraper` only for content and accounts you are authorized to access. Follow X's terms, applicable law, copyright, data-protection rules, and the expectations of people whose content you archive. Do not use it for private-data harvesting, surveillance, access-control evasion, or redistribution you are not permitted to perform.
+
+Session profiles and exports remain local. `.sessions/` and `output/` are ignored by Git. The application does not upload archives, cookies, or credentials.
 
 ## License
 

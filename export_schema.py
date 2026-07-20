@@ -15,7 +15,6 @@ from urllib.parse import urlparse
 
 from time_utils import ensure_utc
 
-
 EXPORT_SCHEMA_VERSION = "1.0"
 
 _WINDOWS_RESERVED_NAMES = {

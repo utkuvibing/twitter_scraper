@@ -15,7 +15,6 @@ from typing import Any, Dict, Iterable, List, Optional
 from config import CORE_SELECTOR_CHECKS
 from export_schema import atomic_write_json, safe_path_segment
 
-
 RUN_LOG_SCHEMA_VERSION = "0.3"
 
 

@@ -35,10 +35,16 @@ class TerminalUI:
         return f"\033[{self.COLORS[color]}m{text}\033[0m"
 
     def banner(self) -> None:
-        print(self._paint("+------------------------------------------+", "accent"), file=self.stream)
-        print(self._paint("|                x-scraper                 |", "accent"), file=self.stream)
+        print(
+            self._paint("+------------------------------------------+", "accent"), file=self.stream
+        )
+        print(
+            self._paint("|                x-scraper                 |", "accent"), file=self.stream
+        )
         print("|     personal X archive command line      |", file=self.stream)
-        print(self._paint("+------------------------------------------+", "accent"), file=self.stream)
+        print(
+            self._paint("+------------------------------------------+", "accent"), file=self.stream
+        )
 
     def section(self, title: str, number: int | None = None) -> None:
         prefix = f"[{number}] " if number is not None else ""

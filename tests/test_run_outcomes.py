@@ -32,6 +32,23 @@ def request(count: int = 1) -> ScrapeRequest:
     )
 
 
+def date_request() -> ScrapeRequest:
+    return ScrapeRequest(
+        target_username="example",
+        scrape_type="profile",
+        mode_config={
+            "mode": "date_range",
+            "start": datetime(2026, 7, 1, tzinfo=timezone.utc),
+            "end": datetime(2026, 7, 21, tzinfo=timezone.utc),
+        },
+        output_file="archive.json",
+        output_format="json",
+        output_dir=None,
+        browser_profile=str(Path("prepared-profile").resolve()),
+        headless=True,
+    )
+
+
 class OutcomeScraper:
     def __init__(self, tweets=None, interrupt=False):
         self.result = list(tweets or [])
@@ -54,6 +71,9 @@ class OutcomeScraper:
     def scrape_by_count(self, _count):
         if self.interrupt:
             raise KeyboardInterrupt
+        return self.result
+
+    def scrape_by_date(self, _start, _end):
         return self.result
 
 
@@ -117,6 +137,25 @@ def test_duplicate_post_ids_are_exported_once_and_do_not_fake_target_completion(
 
     assert code == ExitCode.PARTIAL
     assert [item.id for item in exported] == ["1"]
+
+
+def test_date_timeline_stall_with_saved_data_is_partial_not_completed():
+    scraper = OutcomeScraper([tweet()])
+    scraper.last_collection_complete = False
+    finalized = []
+
+    def save(run_log, status, exit_code, _output_dir):
+        finalized.append((status, exit_code, run_log))
+        return "run.json"
+
+    with (
+        patch("x_scraper_cli._write_export", return_value="archive.json"),
+        patch("x_scraper_cli._save_run_log", side_effect=save),
+    ):
+        code = run_cli_scrape(date_request(), scraper_factory=Factory(scraper))
+
+    assert code == ExitCode.PARTIAL
+    assert finalized[0][:2] == (RunStatus.PARTIAL, ExitCode.PARTIAL)
 
 
 def test_zero_usable_results_exit_two_without_claiming_completion():

@@ -2,11 +2,10 @@ import os
 import shutil
 import site
 import subprocess
-import sys
+import venv
 from pathlib import Path
 
 import pytest
-
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -14,11 +13,14 @@ ROOT = Path(__file__).resolve().parents[1]
 @pytest.mark.skipif(os.name != "nt", reason="Windows launcher requires cmd.exe")
 def test_launcher_executes_without_reentering_install_when_dependencies_exist(tmp_path):
     project = tmp_path / "project with spaces"
-    scripts = project / ".venv" / "Scripts"
-    scripts.mkdir(parents=True)
+    environment_root = project / ".venv"
+    venv.EnvBuilder(with_pip=False).create(environment_root)
+    site_packages = environment_root / "Lib" / "site-packages"
+    (site_packages / "test-dependencies.pth").write_text(
+        "\n".join(site.getsitepackages()), encoding="utf-8"
+    )
     shutil.copy2(ROOT / "x-scraper.cmd", project / "x-scraper.cmd")
     (project / "main.py").write_text("print('x-scraper test entry')\n", encoding="utf-8")
-    os.link(sys.executable, scripts / "python.exe")
 
     environment = os.environ.copy()
     environment["PIP_NO_INDEX"] = "1"

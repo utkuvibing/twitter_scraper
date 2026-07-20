@@ -1,0 +1,12 @@
+include CHANGELOG.md
+include LICENSE
+include README.md
+include x-scraper.cmd
+include docs/RELEASE_CHECKLIST.md
+include docs/RELEASE_NOTES.md
+prune .github
+prune docs/superpowers
+prune tests
+global-exclude *.py[cod]
+global-exclude .DS_Store
+global-exclude Thumbs.db

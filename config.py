@@ -22,7 +22,7 @@ SELECTORS = {
     "login_button": '[data-testid="LoginForm_Login_Button"]',
     "tweet_article": 'article[data-testid="tweet"]',
     "tweet_text": '[data-testid="tweetText"]',
-    "tweet_time": 'time',
+    "tweet_time": "time",
     "tweet_link": 'a[href*="/status/"]',
     "tweet_image": '[data-testid="tweetPhoto"] img',
     "tweet_video": '[data-testid="videoPlayer"]',

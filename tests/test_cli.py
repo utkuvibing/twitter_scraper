@@ -1,5 +1,6 @@
-import io
 import inspect
+import io
+import os
 import unittest
 from datetime import datetime
 from pathlib import Path
@@ -87,9 +88,7 @@ class CliRequestTests(unittest.TestCase):
 
     def test_rejects_conflicting_sources(self):
         with self.assertRaisesRegex(CliValidationError, "exactly one source"):
-            parse_scrape_request(
-                ["scrape", "--profile", "example", "--bookmarks", "--count", "1"]
-            )
+            parse_scrape_request(["scrape", "--profile", "example", "--bookmarks", "--count", "1"])
 
     def test_rejects_headless_without_an_authorized_browser_profile(self):
         missing = str(Path("missing-default-profile").resolve())
@@ -98,9 +97,7 @@ class CliRequestTests(unittest.TestCase):
             patch("x_scraper_cli.is_prepared_profile", return_value=False),
             self.assertRaisesRegex(CliValidationError, "--browser-profile"),
         ):
-            parse_scrape_request(
-                ["scrape", "--profile", "example", "--count", "1", "--headless"]
-            )
+            parse_scrape_request(["scrape", "--profile", "example", "--count", "1", "--headless"])
 
     def test_rejects_headless_with_a_profile_directory_that_does_not_exist(self):
         missing_profile = Path("missing-authorized-profile").resolve()
@@ -162,12 +159,40 @@ class CliRequestTests(unittest.TestCase):
 
         self.assertTrue(request.exclude_promotional_posts)
 
+    def test_unusable_output_directory_fails_before_scrape_runner(self):
+        with TemporaryDirectory() as temporary_directory:
+            output_file = Path(temporary_directory) / "not-a-directory"
+            output_file.write_text("occupied", encoding="utf-8")
+            called = []
+            with patch("x_scraper_cli.is_prepared_profile", return_value=True):
+                code = run_cli(
+                    [
+                        "scrape",
+                        "--profile",
+                        "example",
+                        "--count",
+                        "1",
+                        "--output-dir",
+                        str(output_file),
+                    ],
+                    scrape_runner=lambda request: called.append(request) or 0,
+                )
+
+        self.assertEqual(code, 2)
+        self.assertEqual(called, [])
+
     def test_diagnostics_accepts_x_urls_and_rejects_other_hosts(self):
-        self.assertEqual(
-            validate_diagnostics_url("https://x.com/home"), "https://x.com/home"
-        )
-        with self.assertRaisesRegex(CliValidationError, "x.com"):
-            validate_diagnostics_url("https://example.com")
+        self.assertEqual(validate_diagnostics_url("https://x.com/home"), "https://x.com/home")
+        for unsafe_url in (
+            "https://example.com",
+            "https://x.com.evil.invalid/home",
+            "https://x.com@evil.invalid/home",
+        ):
+            with (
+                self.subTest(unsafe_url=unsafe_url),
+                self.assertRaisesRegex(CliValidationError, "x.com"),
+            ):
+                validate_diagnostics_url(unsafe_url)
 
     def test_main_dispatches_arguments_to_the_non_interactive_cli(self):
         with patch("x_scraper_cli.run_cli", return_value=7) as run_cli:
@@ -183,7 +208,30 @@ class CliRequestTests(unittest.TestCase):
         ):
             self.assertEqual(run_cli(["--version"]), 0)
 
-        self.assertIn("1.0.0", stdout.getvalue())
+        self.assertIn("1.0.0b1", stdout.getvalue())
+
+    def test_paths_command_is_browser_free_and_uses_current_working_directory(self):
+        with TemporaryDirectory() as temporary_directory:
+            previous = Path.cwd()
+            try:
+                os.chdir(temporary_directory)
+                with (
+                    patch(
+                        "scraper.webdriver.Chrome", side_effect=AssertionError("browser started")
+                    ),
+                    patch("sys.stdout", new_callable=io.StringIO) as stdout,
+                ):
+                    self.assertEqual(run_cli(["paths"]), 0)
+            finally:
+                os.chdir(previous)
+
+        self.assertIn(str(Path(temporary_directory) / "output"), stdout.getvalue())
+
+    def test_rejects_extreme_collection_limits_before_browser_start(self):
+        with self.assertRaisesRegex(CliValidationError, "maximum"):
+            parse_scrape_request(["scrape", "--profile", "example", "--count", "10001"])
+        with self.assertRaisesRegex(CliValidationError, "maximum"):
+            parse_scrape_request(["scrape", "--profile", "example", "--days", "3651"])
 
     def test_terminal_ui_emits_colored_banner_when_color_is_enabled(self):
         from terminal_ui import TerminalUI

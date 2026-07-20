@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
+import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -19,13 +21,13 @@ from chrome_auth import (
 from diagnostics import ScrapeRunLog, record_event, save_run_log
 from document_generator import (
     create_csv_document,
-    default_output_dir,
     create_json_document,
     create_markdown_document,
     create_word_document,
+    default_output_dir,
 )
-from scraper import XScraper
 from run_models import ExitCode, RunStatus
+from scraper import XScraper
 from time_utils import (
     deduplicate_tweets,
     ensure_utc,
@@ -34,11 +36,13 @@ from time_utils import (
     utc_day_range,
     utc_now,
 )
-
+from version import __version__
 
 ALLOWED_DIAGNOSTICS_HOSTS = {"x.com", "www.x.com", "twitter.com", "www.twitter.com"}
 OUTPUT_FORMATS = ("json", "md", "docx", "csv")
-VERSION = "1.0.0"
+VERSION = __version__
+MAX_POST_COUNT = 10_000
+MAX_DAY_RANGE = 3_650
 
 
 class CliValidationError(ValueError):
@@ -93,13 +97,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     diagnostics = subcommands.add_parser("diagnostics", help="check X selectors on a page")
     diagnostics.add_argument("--url", default="https://x.com/home", help="X page to inspect")
+    subcommands.add_parser("paths", help="show browser-free default local paths")
     return parser
 
 
 def _validated_handle(value: str) -> str:
     handle = (value or "").strip().lstrip("@")
     if not re.fullmatch(r"[A-Za-z0-9_]{1,15}", handle):
-        raise CliValidationError("profile handle must contain 1-15 letters, numbers, or underscores")
+        raise CliValidationError(
+            "profile handle must contain 1-15 letters, numbers, or underscores"
+        )
     return handle
 
 
@@ -123,10 +130,14 @@ def _mode_config(namespace: argparse.Namespace) -> dict[str, Any]:
     if has_count:
         if namespace.count <= 0:
             raise CliValidationError("--count must be greater than zero")
+        if namespace.count > MAX_POST_COUNT:
+            raise CliValidationError(f"--count maximum is {MAX_POST_COUNT}")
         return {"mode": "count", "count": namespace.count}
     if has_days:
         if namespace.days <= 0:
             raise CliValidationError("--days must be greater than zero")
+        if namespace.days > MAX_DAY_RANGE:
+            raise CliValidationError(f"--days maximum is {MAX_DAY_RANGE}")
         return {"mode": "days", "days": namespace.days}
 
     start = _parse_iso_date(namespace.start_date, "start date")
@@ -153,9 +164,7 @@ def request_from_namespace(namespace: argparse.Namespace) -> ScrapeRequest:
 
     scrape_type = "bookmarks" if has_bookmarks else "profile"
     target_username = "bookmarks" if has_bookmarks else _validated_handle(namespace.profile)
-    browser_profile = _browser_profile(
-        namespace.browser_profile or default_browser_profile()
-    )
+    browser_profile = _browser_profile(namespace.browser_profile or default_browser_profile())
     if namespace.headless and (
         browser_profile is None or not is_prepared_profile(Path(browser_profile))
     ):
@@ -202,6 +211,21 @@ def validate_diagnostics_url(value: str) -> str:
     return parsed.geturl()
 
 
+def validate_output_directory(value: str | None) -> Path:
+    """Create and probe the selected export root before Chrome starts."""
+    path = Path(value).expanduser().resolve() if value else Path(default_output_dir())
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        if not path.is_dir():
+            raise OSError("selected output root is not a directory")
+        descriptor, probe = tempfile.mkstemp(prefix=".x-scraper-probe-", dir=path)
+        os.close(descriptor)
+        os.unlink(probe)
+    except OSError as exc:
+        raise CliValidationError("output directory must be a writable directory") from exc
+    return path
+
+
 def _save_run_log(
     run_log: ScrapeRunLog,
     status: RunStatus,
@@ -229,11 +253,7 @@ def _collect_request_tweets(scraper: XScraper, request: ScrapeRequest, run_log: 
         tweets = scraper.scrape_bookmarks(get_all=True)
         if mode["mode"] == "days":
             cutoff = utc_now() - timedelta(days=int(mode["days"]))
-            return [
-                tweet
-                for tweet in tweets
-                if tweet.date and ensure_utc(tweet.date) >= cutoff
-            ]
+            return [tweet for tweet in tweets if tweet.date and ensure_utc(tweet.date) >= cutoff]
         filtered, missing = filter_tweets_by_range(tweets, mode["start"], mode["end"])
         if missing:
             record_event(
@@ -317,14 +337,10 @@ def run_cli_scrape(request: ScrapeRequest, scraper_factory=XScraper) -> int:
                 "Manual login did not complete",
                 reason="manual_login_timeout",
             )
-            _save_run_log(
-                run_log, RunStatus.FAILED, ExitCode.FAILED, request.output_dir
-            )
+            _save_run_log(run_log, RunStatus.FAILED, ExitCode.FAILED, request.output_dir)
             return int(ExitCode.FAILED)
 
-        tweets = deduplicate_tweets(
-            _collect_request_tweets(scraper, request, run_log)
-        )
+        tweets = deduplicate_tweets(_collect_request_tweets(scraper, request, run_log))
         if not tweets:
             record_event(
                 run_log,
@@ -333,9 +349,7 @@ def run_cli_scrape(request: ScrapeRequest, scraper_factory=XScraper) -> int:
                 "Scrape completed without collected tweets",
                 reason="timeline_empty",
             )
-            _save_run_log(
-                run_log, RunStatus.FAILED, ExitCode.NO_RESULTS, request.output_dir
-            )
+            _save_run_log(run_log, RunStatus.FAILED, ExitCode.NO_RESULTS, request.output_dir)
             return int(ExitCode.NO_RESULTS)
 
         tweets.sort(key=tweet_sort_key, reverse=True)
@@ -350,33 +364,34 @@ def run_cli_scrape(request: ScrapeRequest, scraper_factory=XScraper) -> int:
             total_tweets=len(tweets),
         )
         requested_count = (
-            int(request.mode_config["count"])
-            if request.mode_config["mode"] == "count"
-            else None
+            int(request.mode_config["count"]) if request.mode_config["mode"] == "count" else None
         )
-        partial = requested_count is not None and len(tweets) < requested_count
+        collection_complete = bool(getattr(scraper, "last_collection_complete", True))
+        partial = (requested_count is not None and len(tweets) < requested_count) or (
+            requested_count is None and not collection_complete
+        )
         if partial:
             record_event(
                 run_log,
                 "timeline_loading",
                 "warning",
-                "The requested post count was not reached",
-                reason="partial_target_not_met",
+                "The requested collection boundary was not reached",
+                reason=(
+                    "partial_target_not_met" if requested_count is not None else "timeline_stalled"
+                ),
                 requested=requested_count,
                 collected=len(tweets),
             )
-            _save_run_log(
-                run_log, RunStatus.PARTIAL, ExitCode.PARTIAL, request.output_dir
+            _save_run_log(run_log, RunStatus.PARTIAL, ExitCode.PARTIAL, request.output_dir)
+            progress = (
+                f"{len(tweets)}/{requested_count} posts"
+                if requested_count is not None
+                else f"{len(tweets)} posts; chronological boundary not confirmed"
             )
-            print(
-                f"Partial export saved ({len(tweets)}/{requested_count} posts): "
-                f"{output_path}"
-            )
+            print(f"Partial export saved ({progress}): {output_path}")
             return int(ExitCode.PARTIAL)
 
-        _save_run_log(
-            run_log, RunStatus.COMPLETED, ExitCode.COMPLETED, request.output_dir
-        )
+        _save_run_log(run_log, RunStatus.COMPLETED, ExitCode.COMPLETED, request.output_dir)
         print(f"Completed: saved {len(tweets)} posts to: {output_path}")
         return int(ExitCode.COMPLETED)
     except KeyboardInterrupt:
@@ -393,9 +408,7 @@ def run_cli_scrape(request: ScrapeRequest, scraper_factory=XScraper) -> int:
                     f"Cancelled-run export failed: {exc}",
                     reason="export_failed",
                 )
-                _save_run_log(
-                    run_log, RunStatus.FAILED, ExitCode.FAILED, request.output_dir
-                )
+                _save_run_log(run_log, RunStatus.FAILED, ExitCode.FAILED, request.output_dir)
                 return int(ExitCode.FAILED)
             record_event(
                 run_log,
@@ -413,9 +426,7 @@ def run_cli_scrape(request: ScrapeRequest, scraper_factory=XScraper) -> int:
             reason="user_cancelled",
             collected=len(tweets),
         )
-        _save_run_log(
-            run_log, RunStatus.CANCELLED, ExitCode.CANCELLED, request.output_dir
-        )
+        _save_run_log(run_log, RunStatus.CANCELLED, ExitCode.CANCELLED, request.output_dir)
         print("Cancelled by user.", file=sys.stderr)
         return int(ExitCode.CANCELLED)
     except Exception as exc:
@@ -448,7 +459,7 @@ def run_cli(
     try:
         namespace = parser.parse_args(args)
     except SystemExit as exc:
-        return int(exc.code)
+        return exc.code if isinstance(exc.code, int) else int(ExitCode.FAILED)
 
     try:
         if namespace.command == "login":
@@ -456,6 +467,7 @@ def run_cli(
             return open_chrome_for_x_login(profile or default_browser_profile())
         if namespace.command == "scrape":
             request = request_from_namespace(namespace)
+            validate_output_directory(request.output_dir)
             if request.browser_profile is None or not is_prepared_profile(
                 Path(request.browser_profile)
             ):
@@ -469,6 +481,10 @@ def run_cli(
             if diagnostics_runner is None:
                 raise CliValidationError("diagnostics execution is not configured")
             return int(diagnostics_runner(url))
+        if namespace.command == "paths":
+            print(f"output_dir={default_output_dir()}")
+            print(f"browser_profile={default_browser_profile()}")
+            return int(ExitCode.COMPLETED)
         parser.print_help()
         return 2
     except CliValidationError as exc:

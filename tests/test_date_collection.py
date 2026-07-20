@@ -1,9 +1,10 @@
 from datetime import datetime, timezone
 
-from diagnostics import ScrapeRunLog
-from scraper import Tweet, XScraper
 from selenium.common.exceptions import NoSuchElementException
 from selenium.webdriver.common.by import By
+
+from diagnostics import ScrapeRunLog
+from scraper import Tweet, XScraper
 from time_utils import DateRangeStopTracker
 
 
@@ -27,11 +28,17 @@ class FakeElement:
 
 
 class TimestampArticle:
-    def __init__(self, timestamp: str | None, text: str = "ordinary archival post", context: str | None = None):
+    def __init__(
+        self,
+        timestamp: str | None,
+        text: str = "ordinary archival post",
+        context: str | None = None,
+        item_id: str = "123",
+    ):
         self.timestamp = timestamp
         self.text = text
         self.context = context
-        self.href = "https://x.com/example/status/123"
+        self.href = f"https://x.com/example/status/{item_id}"
 
     def find_element(self, by, selector):
         if by == By.CSS_SELECTOR and selector == '[data-testid="socialContext"]':
@@ -68,6 +75,34 @@ def test_old_pinned_post_does_not_stop_newer_posts_below_it():
     assert decisions == [False, False, False, False, False, True]
 
 
+def test_profile_date_scrape_processes_newer_posts_below_an_old_pin():
+    articles = [
+        TimestampArticle("2020-01-01T00:00:00Z", context="Pinned", item_id="pin"),
+        TimestampArticle("2026-07-20T00:00:00Z", item_id="new-1"),
+        TimestampArticle("2026-07-15T00:00:00Z", item_id="new-2"),
+        TimestampArticle("2026-07-09T00:00:00Z", item_id="old-1"),
+        TimestampArticle("2026-07-08T00:00:00Z", item_id="old-2"),
+        TimestampArticle("2026-07-07T00:00:00Z", item_id="old-3"),
+    ]
+    scraper = XScraper()
+    scraper.driver = TimelineDriver(articles)
+
+    tweets = scraper.scrape_by_date(
+        datetime(2026, 7, 10, tzinfo=timezone.utc),
+        datetime(2026, 7, 21, tzinfo=timezone.utc),
+    )
+
+    assert [tweet.id for tweet in tweets] == ["new-1", "new-2"]
+
+
+class TimelineDriver:
+    def __init__(self, articles):
+        self.articles = articles
+
+    def find_elements(self, _by, _selector):
+        return self.articles
+
+
 def test_missing_x_timestamp_is_not_fabricated_and_records_a_warning():
     run_log = ScrapeRunLog(target="example")
     scraper = XScraper(run_log=run_log)
@@ -83,9 +118,7 @@ def test_missing_x_timestamp_is_not_fabricated_and_records_a_warning():
 def test_parsed_tweet_timestamp_is_immediately_utc_aware():
     scraper = XScraper()
 
-    tweet = scraper._parse_tweet_element(
-        TimestampArticle("2026-07-20T23:30:00-07:00")
-    )
+    tweet = scraper._parse_tweet_element(TimestampArticle("2026-07-20T23:30:00-07:00"))
 
     assert tweet.date == datetime(2026, 7, 21, 6, 30, tzinfo=timezone.utc)
 

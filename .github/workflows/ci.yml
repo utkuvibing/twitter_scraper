@@ -2,21 +2,21 @@ name: CI
 
 on:
   push:
-    branches:
-      - main
-      - prod-ready
-      - "codex/**"
+    branches: [main, prod-ready, "codex/**"]
   pull_request:
 
-jobs:
-  python:
-    name: Python validation
-    runs-on: ubuntu-latest
+permissions:
+  contents: read
 
+jobs:
+  validation:
+    name: ${{ matrix.os }} / Python ${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12"]
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.11", "3.12", "3.13"]
 
     steps:
       - name: Check out repository
@@ -26,29 +26,47 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+          cache: pip
 
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt build
+      - name: Install package and release tools
+        run: python -m pip install --upgrade pip ".[dev]"
 
-      - name: Run unit tests
-        run: python -m unittest discover -s tests
+      - name: Run tests
+        run: python -m pytest -q
 
-      - name: Compile Python modules
-        run: python -m compileall main.py x_scraper_cli.py scraper.py document_generator.py export_schema.py diagnostics.py config.py
+      - name: Compile runtime modules
+        run: >-
+          python -m compileall -q chrome_auth.py config.py diagnostics.py
+          document_generator.py export_schema.py main.py run_models.py scraper.py
+          terminal_ui.py time_utils.py version.py x_scraper_cli.py
 
-      - name: Verify browser-free CLI commands
-        run: |
-          python main.py --help
-          python main.py --version
+      - name: Lint
+        run: python -m ruff check .
 
-      - name: Build package
+      - name: Verify formatting
+        run: python -m ruff format --check .
+
+      - name: Type check browser-free core
+        run: python -m mypy
+
+      - name: Build wheel and source distribution
         run: python -m build
 
-      - name: Smoke test installed wheel
-        run: |
-          python -m venv .smoke-venv
-          .smoke-venv/bin/python -m pip install dist/*.whl
-          .smoke-venv/bin/x-scraper --help
-          .smoke-venv/bin/x-scraper --version
+      - name: Validate distribution metadata
+        run: python -m twine check dist/*
+
+      - name: Smoke test the installed wheel
+        run: python scripts/wheel_smoke.py
+
+      - name: Audit runtime dependencies
+        run: pip-audit -r requirements.txt
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2

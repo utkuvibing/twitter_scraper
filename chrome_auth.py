@@ -11,7 +11,6 @@ from pathlib import Path
 from config import X_LOGIN_URL
 from terminal_ui import TerminalUI
 
-
 AUTHENTICATED_X_SELECTORS = (
     '[data-testid="AppTabBar_Home_Link"]',
     '[data-testid="SideNav_AccountSwitcher_Button"]',
@@ -45,8 +44,7 @@ def authenticated_x_ui_present(driver: object) -> bool:
     if not callable(find_elements):
         return False
     return any(
-        bool(find_elements("css selector", selector))
-        for selector in AUTHENTICATED_X_SELECTORS
+        bool(find_elements("css selector", selector)) for selector in AUTHENTICATED_X_SELECTORS
     )
 
 
@@ -85,7 +83,9 @@ def open_chrome_for_x_login(browser_profile: str) -> int:
     ui = TerminalUI()
     chrome = find_chrome_executable()
     if not chrome:
-        ui.status("error", "Google Chrome was not found. Install Chrome, then run x-scraper login again.")
+        ui.status(
+            "error", "Google Chrome was not found. Install Chrome, then run x-scraper login again."
+        )
         return 1
 
     profile = Path(browser_profile).expanduser()
@@ -95,7 +95,7 @@ def open_chrome_for_x_login(browser_profile: str) -> int:
             "info",
             "Chrome is opening. Sign in to X, then close this x-scraper Chrome window to continue.",
         )
-        subprocess.run(
+        completed = subprocess.run(
             [
                 chrome,
                 "--disable-background-mode",
@@ -104,8 +104,14 @@ def open_chrome_for_x_login(browser_profile: str) -> int:
             ],
             check=False,
         )
+        if completed.returncode != 0:
+            ui.status("error", "Chrome closed with an error before session setup completed.")
+            return 1
     except OSError as exc:
         ui.status("error", f"Chrome could not start: {exc}")
         return 1
-    ui.status("success", "Chrome session is ready. Starting x-scraper.")
+    ui.status(
+        "success",
+        "Chrome closed. The saved X session will be validated by the next scrape.",
+    )
     return 0

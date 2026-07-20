@@ -39,9 +39,7 @@ def save_cli_run_log(run_log: ScrapeRunLog, status: str = "completed") -> str:
 
 def run_diagnostics_cli(url: str | None = None) -> int:
     """Open an approved X URL and report selector health."""
-    run_log = ScrapeRunLog(
-        target="diagnostics", scrape_type="diagnostics", mode="selector_check"
-    )
+    run_log = ScrapeRunLog(target="diagnostics", scrape_type="diagnostics", mode="selector_check")
     scraper: XScraper | None = None
     try:
         if url is None:
@@ -156,12 +154,10 @@ def _interactive_config(*, include_banner: bool, include_session: bool) -> dict[
     elif mode_choice == "3":
         print("Date format: DD.MM.YYYY (for example 01.01.2026)")
         try:
-            start = ensure_utc(
-                datetime.strptime(input("Start date: ").strip(), "%d.%m.%Y")
+            start = ensure_utc(datetime.strptime(input("Start date: ").strip(), "%d.%m.%Y"))
+            end = ensure_utc(datetime.strptime(input("End date: ").strip(), "%d.%m.%Y")).replace(
+                hour=23, minute=59, second=59, microsecond=999999
             )
-            end = ensure_utc(
-                datetime.strptime(input("End date: ").strip(), "%d.%m.%Y")
-            ).replace(hour=23, minute=59, second=59, microsecond=999999)
         except ValueError as exc:
             raise CliValidationError("dates must use DD.MM.YYYY") from exc
         if start > end:

@@ -1,7 +1,4 @@
-"""
-Document Generator - Tweetleri çeşitli formatlarda kaydet
-Desteklenen formatlar: .docx, .json, .md
-"""
+"""Export archived X posts to supported document formats."""
 
 import csv
 import io
@@ -9,10 +6,10 @@ import logging
 import os
 from pathlib import Path
 from typing import List, Optional
-from datetime import datetime
+
 from docx import Document
-from docx.shared import Pt, Inches, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.shared import Pt, RGBColor
 
 from export_schema import (
     EXPORT_SCHEMA_VERSION,
@@ -24,7 +21,7 @@ from export_schema import (
     normalize_tweet,
     resolve_output_path,
 )
-
+from time_utils import utc_now
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +37,7 @@ BASE_OUTPUT_DIR = default_output_dir()
 def _markdown_quote(value: str) -> str:
     return "\n".join(f"> {line}" for line in value.splitlines())
 
+
 CSV_COLUMNS = (
     "id",
     "date",
@@ -53,9 +51,7 @@ CSV_COLUMNS = (
 )
 
 
-def get_output_path(
-    target_username: str, filename: str, output_dir: Optional[str] = None
-) -> str:
+def get_output_path(target_username: str, filename: str, output_dir: Optional[str] = None) -> str:
     """
     Kullanıcıya özel output klasörü oluştur ve tam yol döndür
 
@@ -98,14 +94,14 @@ def create_word_document(
     doc = Document()
 
     # Başlık stili
-    title = doc.add_heading(f"@{target_username} - Tweet Arşivi", 0)
+    title = doc.add_heading(f"@{target_username} - Post Archive", 0)
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
     # Meta bilgi
     meta_para = doc.add_paragraph()
     meta_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
     meta_run = meta_para.add_run(
-        f"Toplam {len(tweets)} tweet | Oluşturulma: {datetime.now().strftime('%d.%m.%Y %H:%M')}"
+        f"Total: {len(tweets)} posts | Exported: {utc_now().strftime('%Y-%m-%d %H:%M UTC')}"
     )
     meta_run.font.size = Pt(10)
     meta_run.font.color.rgb = RGBColor(128, 128, 128)
@@ -116,7 +112,7 @@ def create_word_document(
     for i, tweet in enumerate(tweets, 1):
         # Tweet numarası ve tarih
         header_para = doc.add_paragraph()
-        header_run = header_para.add_run(f"Tweet #{i}")
+        header_run = header_para.add_run(f"Post #{i}")
         header_run.bold = True
         header_run.font.size = Pt(12)
         header_run.font.color.rgb = RGBColor(29, 155, 240)  # X mavi rengi
@@ -133,7 +129,7 @@ def create_word_document(
         # Medya linkleri
         if tweet.media_urls:
             media_para = doc.add_paragraph()
-            media_label = media_para.add_run("Medya: ")
+            media_label = media_para.add_run("Media: ")
             media_label.bold = True
             media_label.font.size = Pt(9)
             media_label.font.color.rgb = RGBColor(80, 80, 80)
@@ -141,9 +137,7 @@ def create_word_document(
             for j, url in enumerate(tweet.media_urls):
                 if j > 0:
                     media_para.add_run(" | ")
-                media_link = media_para.add_run(
-                    url if len(url) < 80 else url[:77] + "..."
-                )
+                media_link = media_para.add_run(url if len(url) < 80 else url[:77] + "...")
                 media_link.font.size = Pt(8)
                 media_link.font.color.rgb = RGBColor(100, 100, 100)
 
@@ -172,7 +166,7 @@ def create_word_document(
     )
     atomic_save_docx(doc, full_path)
     logger.info("Word document saved: %s", full_path)
-    print(f"Document kaydedildi: {full_path}")
+    print(f"Word document saved: {full_path}")
 
     return full_path
 
@@ -197,14 +191,14 @@ def create_simple_document(
     """
     doc = Document()
 
-    doc.add_heading(f"@{target_username} Tweetleri", 0)
-    doc.add_paragraph(f"Toplam: {len(tweets)} tweet")
+    doc.add_heading(f"@{target_username} Posts", 0)
+    doc.add_paragraph(f"Total: {len(tweets)} posts")
     doc.add_paragraph()
 
     for i, tweet in enumerate(tweets, 1):
         para = doc.add_paragraph()
         para.add_run(f"[{i}] {tweet.date_str}\n").bold = True
-        para.add_run(tweet.text or "[Metin yok - sadece medya]")
+        para.add_run(tweet.text or "[No text - media only]")
         para.add_run("\n")
 
     if not output_path.endswith(".docx"):
@@ -244,7 +238,7 @@ def create_json_document(
     )
     atomic_write_json(full_path, data)
     logger.info("JSON export saved: %s", full_path)
-    print(f"JSON kaydedildi: {full_path}")
+    print(f"JSON saved: {full_path}")
     return full_path
 
 
@@ -262,9 +256,7 @@ def create_csv_document(
     for tweet in tweets:
         normalized = normalize_tweet(tweet)
         normalized["media_urls"] = " | ".join(normalized["media_urls"])
-        writer.writerow(
-            {column: csv_safe(normalized[column]) for column in CSV_COLUMNS}
-        )
+        writer.writerow({column: csv_safe(normalized[column]) for column in CSV_COLUMNS})
 
     full_path = resolve_output_path(
         target_username, output_path, ".csv", default_output_dir(), output_dir
@@ -296,20 +288,20 @@ def create_markdown_document(
     lines = []
     normalized_tweets = [normalize_tweet(tweet) for tweet in tweets]
 
-    lines.append(f"# @{target_username} - Tweet Arşivi\n")
+    lines.append(f"# @{target_username} - Post Archive\n")
     lines.append(f"**Schema:** {EXPORT_SCHEMA_VERSION}\n")
-    lines.append(f"**Toplam:** {len(tweets)} tweet\n")
-    lines.append(f"**Tarih:** {datetime.now().strftime('%d.%m.%Y %H:%M')}\n")
+    lines.append(f"**Total:** {len(tweets)} posts\n")
+    lines.append(f"**Exported:** {utc_now().strftime('%Y-%m-%d %H:%M UTC')}\n")
     lines.append("---\n")
 
     for i, tweet in enumerate(normalized_tweets, 1):
-        lines.append(f"## Tweet #{i}\n")
-        lines.append(f"**Tarih:** {tweet['date_str']}\n")
+        lines.append(f"## Post #{i}\n")
+        lines.append(f"**Date:** {tweet['date_str']}\n")
         if tweet["text"]:
             lines.append(f"\n{_markdown_quote(tweet['text'])}\n")
         if tweet["media_urls"]:
-            lines.append(f"\n**Medya:** {len(tweet['media_urls'])} adet\n")
-        lines.append(f"\n[Tweet Link]({tweet['tweet_url']})\n")
+            lines.append(f"\n**Media:** {len(tweet['media_urls'])} items\n")
+        lines.append(f"\n[Post link]({tweet['tweet_url']})\n")
         lines.append("\n---\n")
 
     full_path = resolve_output_path(
@@ -318,5 +310,5 @@ def create_markdown_document(
     atomic_write_text(full_path, "\n".join(lines))
 
     logger.info("Markdown export saved: %s", full_path)
-    print(f"Markdown kaydedildi: {full_path}")
+    print(f"Markdown saved: {full_path}")
     return full_path

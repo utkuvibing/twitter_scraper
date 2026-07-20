@@ -5,7 +5,6 @@ import pytest
 
 from scraper import XScraper
 
-
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME_MODULES = (
     "chrome_auth.py",

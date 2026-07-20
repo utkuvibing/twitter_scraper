@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from datetime import datetime, time, timezone
 from typing import Any, Iterable, TypeVar
 
-
 T = TypeVar("T")
 
 
