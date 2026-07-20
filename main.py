@@ -308,10 +308,8 @@ def ask_continue():
             print("Lütfen 'E' (Evet) veya 'H' (Hayır) girin.")
 
 
-def main():
-    """Ana uygulama"""
-    if "--diagnostics" in sys.argv:
-        return run_diagnostics_cli()
+def run_interactive():
+    """Run the existing prompt-driven workflow."""
 
     scraper = None
     tweets = []
@@ -650,6 +648,17 @@ def main():
     finally:
         if scraper:
             scraper.stop()
+
+
+def main(argv=None):
+    """Run the command interface or the backwards-compatible interactive wizard."""
+    args = list(sys.argv[1:] if argv is None else argv)
+    if not args:
+        return run_interactive()
+
+    import x_scraper_cli
+
+    return x_scraper_cli.run_cli(args, diagnostics_runner=run_diagnostics_cli)
 
 
 if __name__ == "__main__":

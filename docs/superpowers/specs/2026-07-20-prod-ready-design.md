@@ -52,7 +52,7 @@ Manual login stays the default. Headless use requires an explicit local `--brows
 ### Boundaries
 
 - `main.py` owns the entry point and interactive compatibility layer.
-- A new CLI configuration module owns `argparse`, request validation, and conversion to the existing scrape configuration shape. It is browser-free and directly unit tested.
+- A new `x_scraper_cli.py` module owns `argparse`, request validation, and conversion to the existing scrape configuration shape. It is browser-free and directly unit tested.
 - A small orchestration function owns one scrape run and receives a scraper factory and export writer mapping, allowing browser-free tests for dispatch, exit statuses, and partial exports.
 - `scraper.py` accepts an optional browser-profile directory and adds only the corresponding Chrome option after validating it is a local filesystem path.
 - `document_generator.py` adds CSV export using the normalized public tweet schema, preventing format-specific field drift.

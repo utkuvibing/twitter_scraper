@@ -1,0 +1,184 @@
+"""Browser-free command parsing and validation for the X scraper CLI."""
+
+from __future__ import annotations
+
+import argparse
+import re
+import sys
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlparse
+
+
+ALLOWED_DIAGNOSTICS_HOSTS = {"x.com", "www.x.com", "twitter.com", "www.twitter.com"}
+OUTPUT_FORMATS = ("json", "md", "docx", "csv")
+
+
+class CliValidationError(ValueError):
+    """Raised when a command cannot safely start a browser session."""
+
+
+@dataclass(frozen=True)
+class ScrapeRequest:
+    target_username: str
+    scrape_type: str
+    mode_config: dict[str, Any]
+    output_file: str
+    output_format: str
+    output_dir: str | None
+    browser_profile: str | None
+    headless: bool
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="x-scraper",
+        description="Archive public X posts or your authorized bookmarks.",
+    )
+    subcommands = parser.add_subparsers(dest="command")
+
+    scrape = subcommands.add_parser("scrape", help="run one validated scrape")
+    scrape.add_argument("--profile", help="public X handle to archive")
+    scrape.add_argument("--bookmarks", action="store_true", help="archive your own bookmarks")
+    scrape.add_argument("--count", type=int, help="number of posts to collect")
+    scrape.add_argument("--days", type=int, help="collect posts from the last N days")
+    scrape.add_argument("--from", dest="start_date", help="oldest ISO date (YYYY-MM-DD)")
+    scrape.add_argument("--to", dest="end_date", help="newest ISO date (YYYY-MM-DD)")
+    scrape.add_argument("--format", choices=OUTPUT_FORMATS, default="json")
+    scrape.add_argument("--output", help="output filename, without a directory")
+    scrape.add_argument("--output-dir", help="base directory for exports")
+    scrape.add_argument("--browser-profile", help="local Chrome profile directory to reuse")
+    scrape.add_argument("--headless", action="store_true", help="run Chrome without a window")
+
+    diagnostics = subcommands.add_parser("diagnostics", help="check X selectors on a page")
+    diagnostics.add_argument("--url", default="https://x.com/home", help="X page to inspect")
+    return parser
+
+
+def _validated_handle(value: str) -> str:
+    handle = (value or "").strip().lstrip("@")
+    if not re.fullmatch(r"[A-Za-z0-9_]{1,15}", handle):
+        raise CliValidationError("profile handle must contain 1-15 letters, numbers, or underscores")
+    return handle
+
+
+def _parse_iso_date(value: str, label: str) -> datetime:
+    try:
+        return datetime.strptime(value, "%Y-%m-%d")
+    except (TypeError, ValueError) as exc:
+        raise CliValidationError(f"{label} must use YYYY-MM-DD") from exc
+
+
+def _mode_config(namespace: argparse.Namespace) -> dict[str, Any]:
+    has_count = namespace.count is not None
+    has_days = namespace.days is not None
+    has_date_range = bool(namespace.start_date or namespace.end_date)
+
+    if has_date_range and not (namespace.start_date and namespace.end_date):
+        raise CliValidationError("--from and --to must be supplied together")
+    if sum((has_count, has_days, has_date_range)) != 1:
+        raise CliValidationError("choose exactly one scrape mode")
+    if has_count:
+        if namespace.count <= 0:
+            raise CliValidationError("--count must be greater than zero")
+        return {"mode": "count", "count": namespace.count}
+    if has_days:
+        if namespace.days <= 0:
+            raise CliValidationError("--days must be greater than zero")
+        return {"mode": "days", "days": namespace.days}
+
+    start = _parse_iso_date(namespace.start_date, "start date")
+    end = _parse_iso_date(namespace.end_date, "end date").replace(hour=23, minute=59, second=59)
+    if start > end:
+        raise CliValidationError("start date must not be after end date")
+    return {"mode": "date_range", "start": start, "end": end}
+
+
+def _browser_profile(value: str | None) -> str | None:
+    if not value:
+        return None
+    profile = Path(value).expanduser().resolve()
+    if profile.exists() and not profile.is_dir():
+        raise CliValidationError("--browser-profile must identify a directory")
+    return str(profile)
+
+
+def request_from_namespace(namespace: argparse.Namespace) -> ScrapeRequest:
+    has_profile = bool(namespace.profile)
+    has_bookmarks = bool(namespace.bookmarks)
+    if has_profile == has_bookmarks:
+        raise CliValidationError("choose exactly one source: --profile or --bookmarks")
+
+    scrape_type = "bookmarks" if has_bookmarks else "profile"
+    target_username = "bookmarks" if has_bookmarks else _validated_handle(namespace.profile)
+    browser_profile = _browser_profile(namespace.browser_profile)
+    if namespace.headless and browser_profile is None:
+        raise CliValidationError("--headless requires --browser-profile with an authorized session")
+
+    mode_config = _mode_config(namespace)
+    extension = namespace.format
+    output_file = namespace.output or f"{target_username}_tweets.{extension}"
+    return ScrapeRequest(
+        target_username=target_username,
+        scrape_type=scrape_type,
+        mode_config=mode_config,
+        output_file=output_file,
+        output_format=namespace.format,
+        output_dir=namespace.output_dir,
+        browser_profile=browser_profile,
+        headless=namespace.headless,
+    )
+
+
+def parse_scrape_request(argv: list[str]) -> ScrapeRequest:
+    parser = build_parser()
+    try:
+        namespace = parser.parse_args(argv)
+    except SystemExit as exc:
+        raise CliValidationError("invalid command line arguments") from exc
+    if namespace.command != "scrape":
+        raise CliValidationError("expected the scrape command")
+    return request_from_namespace(namespace)
+
+
+def validate_diagnostics_url(value: str) -> str:
+    parsed = urlparse((value or "").strip())
+    if parsed.scheme != "https" or parsed.hostname not in ALLOWED_DIAGNOSTICS_HOSTS:
+        raise CliValidationError("diagnostics URL must be an https x.com or twitter.com URL")
+    if parsed.username or parsed.password or parsed.port:
+        raise CliValidationError("diagnostics URL must not include credentials or a port")
+    return parsed.geturl()
+
+
+def run_cli(
+    argv: list[str] | None = None,
+    *,
+    scrape_runner=None,
+    diagnostics_runner=None,
+) -> int:
+    """Run a command without starting Chrome until its inputs are validated."""
+    args = list(argv or [])
+    parser = build_parser()
+    try:
+        namespace = parser.parse_args(args)
+    except SystemExit as exc:
+        return int(exc.code)
+
+    try:
+        if namespace.command == "scrape":
+            request = request_from_namespace(namespace)
+            if scrape_runner is None:
+                raise CliValidationError("scrape execution is not configured")
+            return int(scrape_runner(request))
+        if namespace.command == "diagnostics":
+            url = validate_diagnostics_url(namespace.url)
+            if diagnostics_runner is None:
+                raise CliValidationError("diagnostics execution is not configured")
+            return int(diagnostics_runner(url))
+        parser.print_help()
+        return 2
+    except CliValidationError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2

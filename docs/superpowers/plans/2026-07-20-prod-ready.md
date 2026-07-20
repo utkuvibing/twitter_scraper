@@ -4,7 +4,7 @@
 
 **Goal:** Ship an installable, safe, scriptable X/Twitter archival CLI while preserving the existing interactive manual-login workflow.
 
-**Architecture:** Keep Selenium extraction in `scraper.py`; place all browser-free command parsing and request validation in a new `cli.py`. `main.py` dispatches arguments to the new CLI and retains the no-argument interactive wizard. CSV becomes a normalized-schema export beside JSON, Markdown, and DOCX; packaging and CI make the same release path verifiable outside the repository.
+**Architecture:** Keep Selenium extraction in `scraper.py`; place all browser-free command parsing and request validation in a new `x_scraper_cli.py`. `main.py` dispatches arguments to the new CLI and retains the no-argument interactive wizard. CSV becomes a normalized-schema export beside JSON, Markdown, and DOCX; packaging and CI make the same release path verifiable outside the repository.
 
 **Tech Stack:** Python 3.11+, argparse, Selenium, python-docx, setuptools, pytest, GitHub Actions.
 
@@ -21,7 +21,7 @@
 ### Task 1: Browser-free CLI request model and validation
 
 **Files:**
-- Create: `cli.py`
+- Create: `x_scraper_cli.py`
 - Create: `tests/test_cli.py`
 - Modify: `main.py:1-40` and `main.py:311-627`
 
@@ -56,7 +56,7 @@ def test_validate_diagnostics_url_rejects_a_non_x_host():
 
 Run: `python -m pytest tests/test_cli.py -q`
 
-Expected: collection fails with `ModuleNotFoundError: No module named 'cli'`.
+Expected: collection fails with `ModuleNotFoundError: No module named 'x_scraper_cli'`.
 
 - [ ] **Step 3: Implement the parser and request model**
 
@@ -91,14 +91,14 @@ Expected: all tests pass.
 - [ ] **Step 5: Commit the task**
 
 ```bash
-git add cli.py main.py tests/test_cli.py
+git add x_scraper_cli.py main.py tests/test_cli.py
 git commit -m "feat: add validated non-interactive CLI"
 ```
 
 ### Task 2: Safe authorized Chrome-profile reuse and CLI scrape dispatch
 
 **Files:**
-- Modify: `cli.py`
+- Modify: `x_scraper_cli.py`
 - Modify: `scraper.py:64-117`
 - Modify: `tests/test_cli.py`
 - Modify: `tests/test_scroll_helpers.py`
@@ -202,7 +202,7 @@ Expected: all tests pass.
 - [ ] **Step 5: Commit the task**
 
 ```bash
-git add cli.py scraper.py tests/test_cli.py tests/test_scroll_helpers.py
+git add x_scraper_cli.py scraper.py tests/test_cli.py tests/test_scroll_helpers.py
 git commit -m "feat: support authorized browser profiles"
 ```
 
@@ -210,7 +210,7 @@ git commit -m "feat: support authorized browser profiles"
 
 **Files:**
 - Modify: `document_generator.py:1-270`
-- Modify: `cli.py`
+- Modify: `x_scraper_cli.py`
 - Modify: `main.py:78-296` and `main.py:311-627`
 - Modify: `tests/test_exports.py`
 
@@ -265,7 +265,7 @@ Expected: all tests pass.
 - [ ] **Step 5: Commit the task**
 
 ```bash
-git add document_generator.py main.py cli.py tests/test_exports.py tests/test_cli.py
+git add document_generator.py main.py x_scraper_cli.py tests/test_exports.py tests/test_cli.py
 git commit -m "feat: add CSV tweet exports"
 ```
 
@@ -288,12 +288,12 @@ git commit -m "feat: add CSV tweet exports"
 
 ```python
 def test_cli_version_does_not_start_a_browser(capsys, monkeypatch):
-    monkeypatch.setattr(cli, "run_cli_scrape", pytest.fail)
-    assert cli.run_cli(["--version"]) == 0
+    monkeypatch.setattr(x_scraper_cli, "run_cli_scrape", pytest.fail)
+    assert x_scraper_cli.run_cli(["--version"]) == 0
     assert "1.0.0" in capsys.readouterr().out
 
 def test_cli_help_is_successful(capsys):
-    assert cli.run_cli(["--help"]) == 0
+    assert x_scraper_cli.run_cli(["--help"]) == 0
     assert "scrape" in capsys.readouterr().out
 ```
 
@@ -324,14 +324,14 @@ Replace corrupted user-facing strings with clear English text, retaining behavio
 
 - [ ] **Step 4: Run local packaging and smoke tests**
 
-Run: `python -m pip install --upgrade build && python -m pytest -q && python -m compileall main.py cli.py scraper.py document_generator.py export_schema.py diagnostics.py config.py && python main.py --help && python main.py --version && python -m build`
+Run: `python -m pip install --upgrade build && python -m pytest -q && python -m compileall main.py x_scraper_cli.py scraper.py document_generator.py export_schema.py diagnostics.py config.py && python main.py --help && python main.py --version && python -m build`
 
 Expected: tests pass, commands return zero without Chrome startup, and `dist/` contains a wheel and source archive.
 
 - [ ] **Step 5: Commit the task**
 
 ```bash
-git add pyproject.toml LICENSE README.md requirements.txt .github/workflows/ci.yml main.py scraper.py document_generator.py cli.py tests/test_cli.py
+git add pyproject.toml LICENSE README.md requirements.txt .github/workflows/ci.yml main.py scraper.py document_generator.py x_scraper_cli.py tests/test_cli.py
 git commit -m "release: package the production CLI"
 ```
 
@@ -346,7 +346,7 @@ git commit -m "release: package the production CLI"
 
 - [ ] **Step 1: Run the full release test matrix locally**
 
-Run: `python -m pytest -q; python -m compileall main.py cli.py scraper.py document_generator.py export_schema.py diagnostics.py config.py; python main.py --help; python main.py --version; python -m build`
+Run: `python -m pytest -q; python -m compileall main.py x_scraper_cli.py scraper.py document_generator.py export_schema.py diagnostics.py config.py; python main.py --help; python main.py --version; python -m build`
 
 Expected: zero test failures, successful compilation/build, and browser-free CLI help/version output.
 
