@@ -27,6 +27,7 @@ from selenium.common.exceptions import (
 from webdriver_manager.chrome import ChromeDriverManager
 
 from config import (
+    X_BASE_URL,
     X_LOGIN_URL,
     X_PROFILE_URL,
     X_BOOKMARKS_URL,
@@ -271,30 +272,35 @@ class XScraper:
         try:
             record_event(self.run_log, "manual_login", "info", "Checking saved X session")
             print("[INFO] Checking the saved X session...")
-            self.driver.get(X_LOGIN_URL)
-            current_url = self.driver.current_url.lower()
-            is_authenticated = (
-                "x.com" in current_url
-                and "login" not in current_url
-                and "flow" not in current_url
-            )
-            if is_authenticated:
-                print("[OK] Saved X session is ready.")
-                record_event(self.run_log, "manual_login", "info", "Saved X session confirmed")
-                return True
+            self.driver.get(f"{X_BASE_URL}/home")
 
-            print(
-                "[ERROR] No X session was found. Run x-scraper login to sign in using "
-                "normal Chrome; Google and Apple sign-in are not available in this window."
-            )
-            record_event(
-                self.run_log,
-                "manual_login",
-                "error",
-                "Saved X session was not authenticated",
-                reason="manual_login_session_missing",
-            )
-            return False
+            def is_authenticated(driver):
+                current_url = driver.current_url.lower()
+                return (
+                    "x.com" in current_url
+                    and "login" not in current_url
+                    and "flow" not in current_url
+                )
+
+            try:
+                WebDriverWait(self.driver, 15).until(is_authenticated)
+            except TimeoutException:
+                print(
+                    "[ERROR] No X session was found. Run x-scraper login to sign in using "
+                    "normal Chrome; Google and Apple sign-in are not available in this window."
+                )
+                record_event(
+                    self.run_log,
+                    "manual_login",
+                    "error",
+                    "Saved X session was not authenticated",
+                    reason="manual_login_session_missing",
+                )
+                return False
+
+            print("[OK] Saved X session is ready.")
+            record_event(self.run_log, "manual_login", "info", "Saved X session confirmed")
+            return True
         except Exception as exc:
             print(f"[ERROR] Saved-session check failed: {exc}")
             record_event(
