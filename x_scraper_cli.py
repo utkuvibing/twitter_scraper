@@ -6,10 +6,20 @@ import argparse
 import re
 import sys
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
+
+from diagnostics import ScrapeRunLog, record_event, save_run_log
+from document_generator import (
+    BASE_OUTPUT_DIR,
+    create_csv_document,
+    create_json_document,
+    create_markdown_document,
+    create_word_document,
+)
+from scraper import XScraper
 
 
 ALLOWED_DIAGNOSTICS_HOSTS = {"x.com", "www.x.com", "twitter.com", "www.twitter.com"}
@@ -114,8 +124,13 @@ def request_from_namespace(namespace: argparse.Namespace) -> ScrapeRequest:
     scrape_type = "bookmarks" if has_bookmarks else "profile"
     target_username = "bookmarks" if has_bookmarks else _validated_handle(namespace.profile)
     browser_profile = _browser_profile(namespace.browser_profile)
-    if namespace.headless and browser_profile is None:
-        raise CliValidationError("--headless requires --browser-profile with an authorized session")
+    if namespace.headless and (
+        browser_profile is None or not Path(browser_profile).is_dir()
+    ):
+        raise CliValidationError(
+            "--headless requires --browser-profile pointing to an existing directory "
+            "with an authorized session"
+        )
 
     mode_config = _mode_config(namespace)
     extension = namespace.format
@@ -152,6 +167,148 @@ def validate_diagnostics_url(value: str) -> str:
     return parsed.geturl()
 
 
+def _save_run_log(run_log: ScrapeRunLog, status: str, output_dir: str | None) -> str:
+    run_log.mark_completed(status)
+    return save_run_log(run_log, BASE_OUTPUT_DIR, output_dir=output_dir)
+
+
+def _collect_request_tweets(scraper: XScraper, request: ScrapeRequest, run_log: ScrapeRunLog):
+    mode = request.mode_config
+    if request.scrape_type == "bookmarks":
+        if not scraper.navigate_to_bookmarks():
+            record_event(
+                run_log,
+                "bookmarks_navigation",
+                "error",
+                "Bookmarks navigation failed",
+                reason="bookmarks_navigation_failed",
+            )
+            return []
+        if mode["mode"] == "count":
+            return scraper.scrape_bookmarks(count=int(mode["count"]))
+        tweets = scraper.scrape_bookmarks(get_all=True)
+        if mode["mode"] == "days":
+            cutoff = datetime.now() - timedelta(days=int(mode["days"]))
+            return [tweet for tweet in tweets if tweet.date and tweet.date >= cutoff]
+        return [
+            tweet
+            for tweet in tweets
+            if tweet.date and mode["start"] <= tweet.date <= mode["end"]
+        ]
+
+    if not scraper.navigate_to_profile(request.target_username):
+        record_event(
+            run_log,
+            "profile_navigation",
+            "error",
+            "Profile navigation failed",
+            reason="profile_navigation_failed",
+        )
+        return []
+    if mode["mode"] == "count":
+        return scraper.scrape_by_count(int(mode["count"]))
+    if mode["mode"] == "days":
+        return scraper.scrape_last_n_days(int(mode["days"]))
+    return scraper.scrape_by_date(mode["start"], mode["end"])
+
+
+def _write_export(tweets, request: ScrapeRequest) -> str:
+    if request.output_format == "json":
+        return create_json_document(
+            tweets,
+            request.output_file,
+            request.target_username,
+            output_dir=request.output_dir,
+            scrape_type=request.scrape_type,
+        )
+    if request.output_format == "md":
+        return create_markdown_document(
+            tweets,
+            request.output_file,
+            request.target_username,
+            output_dir=request.output_dir,
+        )
+    if request.output_format == "csv":
+        return create_csv_document(
+            tweets,
+            request.output_file,
+            request.target_username,
+            output_dir=request.output_dir,
+        )
+    return create_word_document(
+        tweets,
+        request.output_file,
+        request.target_username,
+        output_dir=request.output_dir,
+    )
+
+
+def run_cli_scrape(request: ScrapeRequest, scraper_factory=XScraper) -> int:
+    """Run a validated scrape with manual browser login and structured logging."""
+    run_log = ScrapeRunLog(
+        target=request.target_username,
+        scrape_type=request.scrape_type,
+        mode=str(request.mode_config["mode"]),
+    )
+    scraper = scraper_factory(
+        headless=request.headless,
+        run_log=run_log,
+        browser_profile=request.browser_profile,
+    )
+    try:
+        scraper.start()
+        if not scraper.manual_login():
+            record_event(
+                run_log,
+                "manual_login",
+                "error",
+                "Manual login did not complete",
+                reason="manual_login_timeout",
+            )
+            _save_run_log(run_log, "failed", request.output_dir)
+            return 1
+
+        tweets = _collect_request_tweets(scraper, request, run_log)
+        if not tweets:
+            record_event(
+                run_log,
+                "timeline_loading",
+                "error",
+                "Scrape completed without collected tweets",
+                reason="timeline_empty",
+            )
+            _save_run_log(run_log, "failed", request.output_dir)
+            return 2
+
+        tweets.sort(key=lambda tweet: tweet.date or datetime.min, reverse=True)
+        output_path = _write_export(tweets, request)
+        record_event(
+            run_log,
+            "export_saving",
+            "info",
+            "Export saved",
+            path=output_path,
+            format=request.output_format,
+            total_tweets=len(tweets),
+        )
+        _save_run_log(run_log, "completed", request.output_dir)
+        print(f"Saved {len(tweets)} posts to: {output_path}")
+        return 0
+    except Exception as exc:
+        record_event(
+            run_log,
+            "cli_scrape",
+            "error",
+            f"Scrape failed: {exc}",
+            reason="unknown_error",
+        )
+        _save_run_log(run_log, "failed", request.output_dir)
+        print(f"error: scrape failed: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        scraper.stop()
+
+
 def run_cli(
     argv: list[str] | None = None,
     *,
@@ -169,9 +326,7 @@ def run_cli(
     try:
         if namespace.command == "scrape":
             request = request_from_namespace(namespace)
-            if scrape_runner is None:
-                raise CliValidationError("scrape execution is not configured")
-            return int(scrape_runner(request))
+            return int((scrape_runner or run_cli_scrape)(request))
         if namespace.command == "diagnostics":
             url = validate_diagnostics_url(namespace.url)
             if diagnostics_runner is None:

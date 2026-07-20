@@ -1,3 +1,5 @@
+import codecs
+import csv
 import json
 import os
 import tempfile
@@ -7,6 +9,7 @@ from datetime import datetime, timezone
 from typing import List
 
 from document_generator import (
+    create_csv_document,
     create_json_document,
     create_markdown_document,
     create_word_document,
@@ -90,6 +93,23 @@ class ExportSchemaTests(unittest.TestCase):
 
 
 class DocumentExportTests(unittest.TestCase):
+    def test_csv_export_uses_normalized_schema_and_spreadsheet_encoding(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            csv_path = create_csv_document([DummyTweet()], "archive.csv", "@example", output_dir=tmp)
+
+            with open(csv_path, "rb") as f:
+                payload = f.read()
+
+        self.assertTrue(payload.startswith(codecs.BOM_UTF8))
+        rows = list(csv.DictReader(payload.decode("utf-8-sig").splitlines()))
+        self.assertEqual(
+            rows[0]["tweet_url"], "https://x.com/example/status/123"
+        )
+        self.assertEqual(
+            rows[0]["media_urls"], "https://pbs.twimg.com/media/example.jpg"
+        )
+        self.assertEqual(rows[0]["likes"], "5")
+
     def test_json_markdown_and_docx_exports_write_files(self):
         tweets = [DummyTweet()]
         with tempfile.TemporaryDirectory() as tmp:

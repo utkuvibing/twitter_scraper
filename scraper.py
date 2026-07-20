@@ -2,9 +2,10 @@
 X (Twitter) Scraper - Selenium ile tweet toplama
 """
 
-import time
 import random
+import time
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import List, Dict, Optional
 from dataclasses import dataclass
 
@@ -64,7 +65,12 @@ class Tweet:
 class XScraper:
     """X (Twitter) Tweet Scraper"""
 
-    def __init__(self, headless: bool = False, run_log: Optional[ScrapeRunLog] = None):
+    def __init__(
+        self,
+        headless: bool = False,
+        run_log: Optional[ScrapeRunLog] = None,
+        browser_profile: Optional[str] = None,
+    ):
         """
         Scraper'ı başlat
 
@@ -75,6 +81,9 @@ class XScraper:
         self.headless = headless
         self.collected_tweet_ids = set()
         self.run_log = run_log
+        self.browser_profile = (
+            str(Path(browser_profile).expanduser().resolve()) if browser_profile else None
+        )
 
     def _setup_driver(self):
         """Chrome WebDriver'ı yapılandır ve başlat"""
@@ -82,6 +91,9 @@ class XScraper:
 
         for option in CHROME_OPTIONS:
             chrome_options.add_argument(option)
+
+        if self.browser_profile:
+            chrome_options.add_argument(f"--user-data-dir={self.browser_profile}")
 
         if self.headless:
             chrome_options.add_argument("--headless=new")

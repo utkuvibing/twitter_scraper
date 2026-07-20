@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from scraper import XScraper
 from document_generator import (
     BASE_OUTPUT_DIR,
+    create_csv_document,
     create_word_document,
     create_json_document,
     create_markdown_document,
@@ -168,7 +169,8 @@ def get_user_input():
     print("1. JSON (MCP-ready, önerilen)")
     print("2. Markdown (.md)")
     print("3. Word (.docx)")
-    format_choice = input("Seçiminiz (1/2/3): ").strip()
+    print("4. CSV (.csv)")
+    format_choice = input("Seçiminiz (1/2/3/4): ").strip()
 
     if format_choice == "2":
         output_format = "md"
@@ -176,6 +178,9 @@ def get_user_input():
     elif format_choice == "3":
         output_format = "docx"
         ext = ".docx"
+    elif format_choice == "4":
+        output_format = "csv"
+        ext = ".csv"
     else:
         output_format = "json"
         ext = ".json"
@@ -266,7 +271,8 @@ def get_scrape_config():
     print("1. JSON (MCP-ready, önerilen)")
     print("2. Markdown (.md)")
     print("3. Word (.docx)")
-    format_choice = input("Seçiminiz (1/2/3): ").strip()
+    print("4. CSV (.csv)")
+    format_choice = input("Seçiminiz (1/2/3/4): ").strip()
 
     if format_choice == "2":
         output_format = "md"
@@ -274,6 +280,9 @@ def get_scrape_config():
     elif format_choice == "3":
         output_format = "docx"
         ext = ".docx"
+    elif format_choice == "4":
+        output_format = "csv"
+        ext = ".csv"
     else:
         output_format = "json"
         ext = ".json"
@@ -454,6 +463,11 @@ def run_interactive():
                     output_path = create_markdown_document(
                         tweets, config["output_file"], config["target_username"]
                     )
+                elif output_format == "csv":
+                    print("CSV dosyası oluşturuluyor...")
+                    output_path = create_csv_document(
+                        tweets, config["output_file"], config["target_username"]
+                    )
                 else:
                     print("Word document oluşturuluyor...")
                     output_path = create_word_document(
@@ -542,6 +556,9 @@ def run_interactive():
                 elif output_format == "md":
                     output_file = f"{base_name}_PARTIAL.md"
                     output_path = create_markdown_document(tweets, output_file, config["target_username"])
+                elif output_format == "csv":
+                    output_file = f"{base_name}_PARTIAL.csv"
+                    output_path = create_csv_document(tweets, output_file, config["target_username"])
                 else:
                     output_file = f"{base_name}_PARTIAL.docx"
                     output_path = create_word_document(tweets, output_file, config["target_username"])
@@ -607,6 +624,9 @@ def run_interactive():
                 elif output_format == "md":
                     output_file = f"{base_name}_ERROR.md"
                     output_path = create_markdown_document(tweets, output_file, config["target_username"])
+                elif output_format == "csv":
+                    output_file = f"{base_name}_ERROR.csv"
+                    output_path = create_csv_document(tweets, output_file, config["target_username"])
                 else:
                     output_file = f"{base_name}_ERROR.docx"
                     output_path = create_word_document(tweets, output_file, config["target_username"])

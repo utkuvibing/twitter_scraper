@@ -3,6 +3,8 @@ Document Generator - Tweetleri çeşitli formatlarda kaydet
 Desteklenen formatlar: .docx, .json, .md
 """
 
+import csv
+import io
 import logging
 import os
 from typing import List, Optional
@@ -27,6 +29,22 @@ logger = logging.getLogger(__name__)
 
 # Base output dizini
 BASE_OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
+
+CSV_COLUMNS = (
+    "id",
+    "date",
+    "date_str",
+    "text",
+    "tweet_url",
+    "has_media",
+    "media_urls",
+    "has_article",
+    "needs_full_text",
+    "likes",
+    "retweets",
+    "replies",
+    "views",
+)
 
 
 def get_output_path(
@@ -221,6 +239,31 @@ def create_json_document(
     atomic_write_json(full_path, data)
     logger.info("JSON export saved: %s", full_path)
     print(f"JSON kaydedildi: {full_path}")
+    return full_path
+
+
+def create_csv_document(
+    tweets: List,
+    output_path: str,
+    target_username: str,
+    output_dir: Optional[str] = None,
+) -> str:
+    """Write normalized tweets as a spreadsheet-friendly CSV file."""
+    stream = io.StringIO(newline="")
+    writer = csv.DictWriter(stream, fieldnames=CSV_COLUMNS, lineterminator="\n")
+    writer.writeheader()
+
+    for tweet in tweets:
+        normalized = normalize_tweet(tweet)
+        normalized["media_urls"] = " | ".join(normalized["media_urls"])
+        writer.writerow({column: normalized[column] for column in CSV_COLUMNS})
+
+    full_path = resolve_output_path(
+        target_username, output_path, ".csv", BASE_OUTPUT_DIR, output_dir
+    )
+    atomic_write_text(full_path, stream.getvalue(), encoding="utf-8-sig")
+    logger.info("CSV saved: %s", full_path)
+    print(f"CSV saved: {full_path}")
     return full_path
 
 
