@@ -318,11 +318,8 @@ class CliRequestTests(unittest.TestCase):
         driver = FakeChromeDriver()
         with (
             patch("scraper.Options", return_value=options),
-            patch("scraper.ChromeDriverManager") as manager,
-            patch("scraper.Service"),
             patch("scraper.webdriver.Chrome", return_value=driver),
         ):
-            manager.return_value.install.return_value = "chromedriver"
             XScraper(browser_profile=str(profile))._setup_driver()
 
         self.assertIn(f"--user-data-dir={profile}", options.arguments)
@@ -332,17 +329,26 @@ class CliRequestTests(unittest.TestCase):
         driver = FakeChromeDriver()
         with (
             patch("scraper.Options", return_value=options),
-            patch("scraper.ChromeDriverManager") as manager,
-            patch("scraper.Service"),
             patch("scraper.webdriver.Chrome", return_value=driver),
         ):
-            manager.return_value.install.return_value = "chromedriver"
             XScraper()._setup_driver()
 
         self.assertNotIn("--no-sandbox", options.arguments)
         self.assertNotIn("excludeSwitches", options.experimental_options)
         self.assertNotIn("useAutomationExtension", options.experimental_options)
         self.assertEqual(driver.cdp_commands, [])
+
+    def test_setup_driver_bounds_webdriver_commands_and_uses_selenium_manager(self):
+        driver = FakeChromeDriver()
+        with (
+            patch("scraper.Options", return_value=RecordingChromeOptions()),
+            patch("scraper.webdriver.Chrome", return_value=driver) as chrome,
+        ):
+            XScraper()._setup_driver()
+
+        self.assertNotIn("service", chrome.call_args.kwargs)
+        self.assertEqual(driver.command_executor.timeouts, [15])
+        self.assertEqual(driver.script_timeouts, [15])
 
 
 class RecordingChromeOptions:
@@ -360,6 +366,8 @@ class RecordingChromeOptions:
 class FakeChromeDriver:
     def __init__(self):
         self.cdp_commands = []
+        self.command_executor = FakeCommandExecutor()
+        self.script_timeouts = []
 
     def execute_cdp_cmd(self, *_args):
         self.cdp_commands.append(_args)
@@ -369,6 +377,17 @@ class FakeChromeDriver:
 
     def set_page_load_timeout(self, *_args):
         pass
+
+    def set_script_timeout(self, value):
+        self.script_timeouts.append(value)
+
+
+class FakeCommandExecutor:
+    def __init__(self):
+        self.timeouts = []
+
+    def set_timeout(self, value):
+        self.timeouts.append(value)
 
 
 if __name__ == "__main__":

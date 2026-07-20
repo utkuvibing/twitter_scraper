@@ -23,6 +23,15 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertIn("MIT License", license_text)
         self.assertIn("Permission is hereby granted", license_text)
 
+    def test_runtime_dependencies_use_selenium_manager_without_webdriver_manager(self):
+        with (ROOT / "pyproject.toml").open("rb") as metadata_file:
+            metadata = tomllib.load(metadata_file)
+        dependencies = metadata["project"]["dependencies"]
+        requirements = (ROOT / "requirements.txt").read_text(encoding="utf-8")
+
+        self.assertFalse(any("webdriver-manager" in item for item in dependencies))
+        self.assertNotIn("webdriver-manager", requirements)
+
 
 if __name__ == "__main__":
     unittest.main()

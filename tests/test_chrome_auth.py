@@ -1,4 +1,5 @@
 import unittest
+import os
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
@@ -6,6 +7,34 @@ from unittest.mock import patch
 from selenium.common.exceptions import TimeoutException
 
 class ChromeAuthTests(unittest.TestCase):
+    def test_linux_discovery_accepts_google_chrome_and_chromium(self):
+        from chrome_auth import find_chrome_executable
+
+        def locate(name):
+            return "/usr/bin/chromium" if name == "chromium" else None
+
+        with (
+            patch("chrome_auth.sys.platform", "linux"),
+            patch("chrome_auth.shutil.which", side_effect=locate),
+        ):
+            self.assertEqual(find_chrome_executable(), "/usr/bin/chromium")
+
+    def test_windows_discovery_handles_program_files_paths(self):
+        from chrome_auth import find_chrome_executable
+
+        environment = {"PROGRAMFILES": r"C:\Program Files"}
+        with (
+            patch("chrome_auth.sys.platform", "win32"),
+            patch("chrome_auth.shutil.which", return_value=None),
+            patch.dict(os.environ, environment, clear=True),
+            patch("chrome_auth.Path.is_file", return_value=True),
+        ):
+            found = find_chrome_executable()
+
+        self.assertEqual(
+            found,
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        )
     def test_normal_chrome_login_uses_an_isolated_profile(self):
         from chrome_auth import open_chrome_for_x_login
 

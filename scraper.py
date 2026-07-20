@@ -10,11 +10,9 @@ from typing import List, Dict, Optional
 from dataclasses import dataclass
 
 from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import (
@@ -24,8 +22,6 @@ from selenium.common.exceptions import (
     StaleElementReferenceException,
     WebDriverException,
 )
-from webdriver_manager.chrome import ChromeDriverManager
-
 from config import (
     X_BASE_URL,
     X_LOGIN_URL,
@@ -103,24 +99,49 @@ class XScraper:
         if self.headless:
             chrome_options.add_argument("--headless=new")
 
-        service = Service(ChromeDriverManager().install())
-        self.driver = webdriver.Chrome(service=service, options=chrome_options)
+        self.driver = webdriver.Chrome(options=chrome_options)
 
         self.driver.implicitly_wait(IMPLICIT_WAIT)
         self.driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT)
+        self.driver.set_script_timeout(15)
+        command_executor = getattr(self.driver, "command_executor", None)
+        if command_executor is not None and hasattr(command_executor, "set_timeout"):
+            command_executor.set_timeout(15)
 
     def start(self):
         """Driver'ı başlat"""
         if not self.driver:
-            self._setup_driver()
+            try:
+                self._setup_driver()
+            except (OSError, WebDriverException) as exc:
+                record_event(
+                    self.run_log,
+                    "browser_start",
+                    "error",
+                    f"Chrome could not start: {exc}",
+                    reason="browser_start_failed",
+                )
+                raise RuntimeError(
+                    "Chrome could not start. Confirm Chrome is installed and network access "
+                    "is available if Selenium Manager must obtain ChromeDriver."
+                ) from exc
             record_event(self.run_log, "browser_start", "info", "Chrome WebDriver started")
 
     def stop(self):
         """Driver'ı kapat"""
         if self.driver:
-            self.driver.quit()
-            self.driver = None
-            record_event(self.run_log, "browser_stop", "info", "Chrome WebDriver stopped")
+            try:
+                self.driver.quit()
+            except (NoSuchWindowException, WebDriverException):
+                record_event(
+                    self.run_log,
+                    "browser_stop",
+                    "warning",
+                    "Chrome was already closed during cleanup",
+                )
+            finally:
+                self.driver = None
+                record_event(self.run_log, "browser_stop", "info", "Chrome WebDriver stopped")
 
     def run_selector_diagnostics(self):
         """Run configured selector checks on the current browser page."""
@@ -159,7 +180,7 @@ class XScraper:
                     if "Next" in btn.text or "İleri" in btn.text:
                         btn.click()
                         break
-                except:
+                except (StaleElementReferenceException, WebDriverException):
                     continue
             else:
                 username_input.send_keys(Keys.RETURN)
@@ -188,7 +209,7 @@ class XScraper:
             try:
                 login_btn = self.driver.find_element(By.XPATH, XPATHS["login_button"])
                 login_btn.click()
-            except:
+            except (NoSuchElementException, WebDriverException):
                 password_input.send_keys(Keys.RETURN)
 
             # Giriş başarılı olana kadar bekle (max 10 saniye)
@@ -468,7 +489,7 @@ class XScraper:
                 tweet_url = parent_link.get_attribute("href")
                 if "/status/" in tweet_url:
                     tweet_id = tweet_url.split("/status/")[-1].split("?")[0].split("/")[0]
-            except:
+            except (NoSuchElementException, StaleElementReferenceException, WebDriverException):
                 # Alternatif yöntem
                 links = article.find_elements(By.XPATH, './/a[contains(@href, "/status/")]')
                 for link in links:
@@ -516,7 +537,7 @@ class XScraper:
                         './/a[contains(text(), "Show more") or contains(text(), "Daha fazla")]')
                     if show_more_links:
                         has_show_more = True
-                except:
+                except (StaleElementReferenceException, WebDriverException):
                     pass
 
             if not has_show_more and text:
@@ -596,7 +617,7 @@ class XScraper:
                     if poster:
                         media_urls.append(poster)
 
-            except:
+            except (StaleElementReferenceException, WebDriverException):
                 pass
 
             self.collected_tweet_ids.add(tweet_id)
@@ -621,7 +642,7 @@ class XScraper:
                 "Tweet article became stale while parsing",
             )
             return None
-        except Exception as e:
+        except WebDriverException as e:
             record_event(
                 self.run_log,
                 "tweet_parsing",
@@ -716,7 +737,7 @@ class XScraper:
                         self.driver.execute_script("arguments[0].scrollIntoView(true);", text_elements[0])
                         time.sleep(0.5)
                         text = text_elements[0].text
-                except:
+                except (StaleElementReferenceException, WebDriverException):
                     pass
 
         except Exception as e:
@@ -735,7 +756,7 @@ class XScraper:
                 if len(self.driver.window_handles) > 1:
                     self.driver.close()
                 self.driver.switch_to.window(main_window)
-            except:
+            except (NoSuchWindowException, WebDriverException):
                 pass
 
         if not text:
@@ -839,7 +860,7 @@ class XScraper:
                 if len(self.driver.window_handles) > 1:
                     self.driver.close()
                 self.driver.switch_to.window(main_window)
-            except:
+            except (NoSuchWindowException, WebDriverException):
                 pass
 
     def _scroll_down(self):
@@ -865,35 +886,10 @@ class XScraper:
         delta = 900 * max(1, intensity)
 
         try:
-            self.driver.execute_script("window.focus();")
-        except Exception:
-            pass
-
-        try:
-            ActionChains(self.driver).scroll_by_amount(0, delta).perform()
-            time.sleep(0.15)
-        except Exception:
-            pass
-
-        try:
-            self.driver.execute_cdp_cmd(
-                "Input.dispatchMouseEvent",
-                {
-                    "type": "mouseWheel",
-                    "x": 600,
-                    "y": 600,
-                    "deltaX": 0,
-                    "deltaY": delta,
-                },
-            )
-            time.sleep(0.15)
-        except Exception:
-            pass
-
-        try:
             self.driver.execute_script(
                 """
                 const delta = arguments[0];
+                window.focus();
                 window.dispatchEvent(new WheelEvent('wheel', {
                   deltaY: delta,
                   bubbles: true,
@@ -905,15 +901,16 @@ class XScraper:
                 delta,
             )
             time.sleep(0.15)
-        except Exception:
+            return
+        except (NoSuchWindowException, StaleElementReferenceException, WebDriverException):
             pass
 
         try:
             body = self.driver.find_element(By.TAG_NAME, "body")
             body.send_keys(Keys.PAGE_DOWN)
             time.sleep(0.15)
-        except Exception:
-            pass
+        except (NoSuchElementException, NoSuchWindowException, WebDriverException):
+            return
 
     def _timeline_snapshot(self) -> Dict:
         """DOM ve scroll durumunu tek yerde ölç."""

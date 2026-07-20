@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from selenium.common.exceptions import NoSuchElementException
 from selenium.webdriver.common.by import By
@@ -101,6 +102,22 @@ class FakeCard:
 
 
 class ScrollHelperTests(unittest.TestCase):
+    def test_successful_javascript_scroll_does_not_call_native_or_cdp_fallbacks(self):
+        driver = ScrollDriver()
+        scraper = XScraper(headless=True)
+        scraper.driver = driver
+
+        with patch(
+            "scraper.ActionChains",
+            side_effect=AssertionError("native scroll used"),
+            create=True,
+        ):
+            scraper._perform_timeline_scroll(2)
+
+        self.assertEqual(len(driver.scripts), 1)
+        self.assertEqual(driver.cdp_calls, [])
+        self.assertEqual(driver.find_calls, [])
+
     def test_get_article_ids_fast_extracts_status_ids(self):
         scraper = XScraper(headless=True)
         articles = [
@@ -224,3 +241,20 @@ class ScrollHelperTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ScrollDriver:
+    def __init__(self):
+        self.scripts = []
+        self.cdp_calls = []
+        self.find_calls = []
+
+    def execute_script(self, script, *args):
+        self.scripts.append((script, args))
+
+    def execute_cdp_cmd(self, *args):
+        self.cdp_calls.append(args)
+
+    def find_element(self, *args):
+        self.find_calls.append(args)
+        return FakeTextElement("")

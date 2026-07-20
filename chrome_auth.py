@@ -52,7 +52,13 @@ def authenticated_x_ui_present(driver: object) -> bool:
 
 def find_chrome_executable() -> str | None:
     """Locate a normal Chrome executable without relying on WebDriver."""
-    for name in ("chrome", "google-chrome"):
+    for name in (
+        "chrome",
+        "google-chrome",
+        "google-chrome-stable",
+        "chromium",
+        "chromium-browser",
+    ):
         executable = shutil.which(name)
         if executable:
             return executable

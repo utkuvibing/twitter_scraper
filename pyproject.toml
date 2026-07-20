@@ -25,7 +25,6 @@ classifiers = [
 ]
 dependencies = [
   "selenium>=4.15,<5",
-  "webdriver-manager>=4.0.1,<5",
   "python-docx>=1.1,<2",
 ]
 
