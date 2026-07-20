@@ -13,7 +13,7 @@ from chrome_auth import (
     open_chrome_for_x_login,
 )
 from diagnostics import ScrapeRunLog, record_event, save_run_log
-from document_generator import BASE_OUTPUT_DIR
+from document_generator import default_output_dir
 from run_models import ExitCode, RunStatus
 from scraper import XScraper
 from terminal_ui import TerminalUI
@@ -30,7 +30,7 @@ from x_scraper_cli import (
 def save_cli_run_log(run_log: ScrapeRunLog, status: str = "completed") -> str:
     """Persist a diagnostics run log and print its location."""
     run_log.mark_completed(status)
-    path = save_run_log(run_log, BASE_OUTPUT_DIR)
+    path = save_run_log(run_log, default_output_dir())
     print(f"Run log saved: {path}")
     if run_log.failure_reason:
         print(f"Failure reason: {run_log.failure_reason}")

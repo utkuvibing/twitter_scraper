@@ -7,6 +7,7 @@ import csv
 import io
 import logging
 import os
+from pathlib import Path
 from typing import List, Optional
 from datetime import datetime
 from docx import Document
@@ -19,6 +20,7 @@ from export_schema import (
     atomic_write_json,
     atomic_write_text,
     build_export_payload,
+    csv_safe,
     normalize_tweet,
     resolve_output_path,
 )
@@ -27,8 +29,16 @@ from export_schema import (
 logger = logging.getLogger(__name__)
 
 
-# Base output dizini
-BASE_OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
+def default_output_dir() -> str:
+    """Return the predictable writable output root for the current invocation."""
+    return str((Path.cwd() / "output").resolve())
+
+
+BASE_OUTPUT_DIR = default_output_dir()
+
+
+def _markdown_quote(value: str) -> str:
+    return "\n".join(f"> {line}" for line in value.splitlines())
 
 CSV_COLUMNS = (
     "id",
@@ -40,10 +50,6 @@ CSV_COLUMNS = (
     "media_urls",
     "has_article",
     "needs_full_text",
-    "likes",
-    "retweets",
-    "replies",
-    "views",
 )
 
 
@@ -66,7 +72,7 @@ def get_output_path(
         target_username=target_username,
         filename=filename,
         extension=ext or ".json",
-        base_output_dir=BASE_OUTPUT_DIR,
+        base_output_dir=default_output_dir(),
         output_dir=output_dir,
     )
 
@@ -162,7 +168,7 @@ def create_word_document(
 
     # Kullanıcıya özel output klasörüne kaydet (seçilen dizini kullan)
     full_path = resolve_output_path(
-        target_username, output_path, ".docx", BASE_OUTPUT_DIR, output_dir
+        target_username, output_path, ".docx", default_output_dir(), output_dir
     )
     atomic_save_docx(doc, full_path)
     logger.info("Word document saved: %s", full_path)
@@ -205,7 +211,7 @@ def create_simple_document(
         output_path += ".docx"
 
     full_path = resolve_output_path(
-        target_username, output_path, ".docx", BASE_OUTPUT_DIR, output_dir
+        target_username, output_path, ".docx", default_output_dir(), output_dir
     )
     atomic_save_docx(doc, full_path)
     return full_path
@@ -234,7 +240,7 @@ def create_json_document(
     data = build_export_payload(tweets, target_username, scrape_type=scrape_type)
 
     full_path = resolve_output_path(
-        target_username, output_path, ".json", BASE_OUTPUT_DIR, output_dir
+        target_username, output_path, ".json", default_output_dir(), output_dir
     )
     atomic_write_json(full_path, data)
     logger.info("JSON export saved: %s", full_path)
@@ -256,10 +262,12 @@ def create_csv_document(
     for tweet in tweets:
         normalized = normalize_tweet(tweet)
         normalized["media_urls"] = " | ".join(normalized["media_urls"])
-        writer.writerow({column: normalized[column] for column in CSV_COLUMNS})
+        writer.writerow(
+            {column: csv_safe(normalized[column]) for column in CSV_COLUMNS}
+        )
 
     full_path = resolve_output_path(
-        target_username, output_path, ".csv", BASE_OUTPUT_DIR, output_dir
+        target_username, output_path, ".csv", default_output_dir(), output_dir
     )
     atomic_write_text(full_path, stream.getvalue(), encoding="utf-8-sig")
     logger.info("CSV saved: %s", full_path)
@@ -298,14 +306,14 @@ def create_markdown_document(
         lines.append(f"## Tweet #{i}\n")
         lines.append(f"**Tarih:** {tweet['date_str']}\n")
         if tweet["text"]:
-            lines.append(f"\n{tweet['text']}\n")
+            lines.append(f"\n{_markdown_quote(tweet['text'])}\n")
         if tweet["media_urls"]:
             lines.append(f"\n**Medya:** {len(tweet['media_urls'])} adet\n")
         lines.append(f"\n[Tweet Link]({tweet['tweet_url']})\n")
         lines.append("\n---\n")
 
     full_path = resolve_output_path(
-        target_username, output_path, ".md", BASE_OUTPUT_DIR, output_dir
+        target_username, output_path, ".md", default_output_dir(), output_dir
     )
     atomic_write_text(full_path, "\n".join(lines))
 

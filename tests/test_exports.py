@@ -41,6 +41,42 @@ class DummyTweet:
 
 
 class ExportSchemaTests(unittest.TestCase):
+    def test_media_urls_are_validated_and_deduplicated_in_order(self):
+        tweet = DummyTweet(
+            media_urls=[
+                "https://pbs.twimg.com/media/one.jpg",
+                "not-a-url",
+                "https://pbs.twimg.com/media/one.jpg",
+                "https://pbs.twimg.com/media/two.jpg",
+            ]
+        )
+
+        normalized = normalize_tweet(tweet)
+
+        self.assertEqual(
+            normalized["media_urls"],
+            [
+                "https://pbs.twimg.com/media/one.jpg",
+                "https://pbs.twimg.com/media/two.jpg",
+            ],
+        )
+
+    def test_naive_export_dates_are_explicitly_normalized_to_utc(self):
+        normalized = normalize_tweet(DummyTweet(date=datetime(2026, 5, 12, 10, 30)))
+
+        self.assertEqual(normalized["date"], "2026-05-12T10:30:00+00:00")
+
+    def test_default_output_is_below_the_current_working_directory(self):
+        from document_generator import default_output_dir
+
+        with tempfile.TemporaryDirectory() as tmp:
+            previous = os.getcwd()
+            try:
+                os.chdir(tmp)
+                self.assertEqual(default_output_dir(), os.path.join(tmp, "output"))
+            finally:
+                os.chdir(previous)
+
     def test_safe_path_segment_removes_path_control_characters(self):
         self.assertEqual(safe_path_segment("../@bad:user?name"), "bad_user_name")
         self.assertEqual(safe_path_segment("CON"), "_CON")
@@ -63,7 +99,10 @@ class ExportSchemaTests(unittest.TestCase):
         self.assertEqual(normalized["id"], "123")
         self.assertTrue(normalized["has_media"])
         self.assertEqual(normalized["tweet_url"], normalized["url"])
-        self.assertEqual(normalized["likes"], 5)
+        self.assertNotIn("likes", normalized)
+        self.assertNotIn("retweets", normalized)
+        self.assertNotIn("replies", normalized)
+        self.assertNotIn("views", normalized)
 
         normalized_dict = normalize_tweet({"id": "456", "url": "https://x.com/u/status/456"})
         self.assertEqual(normalized_dict["tweet_url"], "https://x.com/u/status/456")
@@ -93,6 +132,40 @@ class ExportSchemaTests(unittest.TestCase):
 
 
 class DocumentExportTests(unittest.TestCase):
+    def test_markdown_quotes_archive_text_instead_of_treating_it_as_markup(self):
+        tweet = DummyTweet(text="# injected heading\n[click](javascript:alert(1))")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = create_markdown_document([tweet], "archive.md", "example", output_dir=tmp)
+            with open(path, encoding="utf-8") as markdown_file:
+                markdown = markdown_file.read()
+
+        self.assertIn("> # injected heading", markdown)
+        self.assertIn("> [click](javascript:alert(1))", markdown)
+        self.assertNotIn("\n# injected heading", markdown)
+
+    def test_csv_mitigates_formula_injection_without_changing_json_text(self):
+        dangerous = DummyTweet(text="=HYPERLINK(\"https://evil.invalid\")")
+        with tempfile.TemporaryDirectory() as tmp:
+            csv_path = create_csv_document([dangerous], "archive.csv", "example", output_dir=tmp)
+            json_path = create_json_document([dangerous], "archive.json", "example", output_dir=tmp)
+
+            with open(csv_path, encoding="utf-8-sig", newline="") as csv_file:
+                row = next(csv.DictReader(csv_file))
+            with open(json_path, encoding="utf-8") as json_file:
+                payload = json.load(json_file)
+
+        self.assertEqual(row["text"], "'=HYPERLINK(\"https://evil.invalid\")")
+        self.assertEqual(payload["tweets"][0]["text"], dangerous.text)
+
+    def test_csv_mitigates_every_spreadsheet_formula_prefix(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tweets = [DummyTweet(id=str(index), text=f"{prefix}payload") for index, prefix in enumerate("=+-@")]
+            path = create_csv_document(tweets, "archive.csv", "example", output_dir=tmp)
+            with open(path, encoding="utf-8-sig", newline="") as csv_file:
+                rows = list(csv.DictReader(csv_file))
+
+        self.assertEqual([row["text"] for row in rows], ["'=payload", "'+payload", "'-payload", "'@payload"])
+
     def test_csv_export_uses_normalized_schema_and_spreadsheet_encoding(self):
         with tempfile.TemporaryDirectory() as tmp:
             csv_path = create_csv_document([DummyTweet()], "archive.csv", "@example", output_dir=tmp)
@@ -108,7 +181,7 @@ class DocumentExportTests(unittest.TestCase):
         self.assertEqual(
             rows[0]["media_urls"], "https://pbs.twimg.com/media/example.jpg"
         )
-        self.assertEqual(rows[0]["likes"], "5")
+        self.assertNotIn("likes", rows[0])
 
     def test_json_markdown_and_docx_exports_write_files(self):
         tweets = [DummyTweet()]

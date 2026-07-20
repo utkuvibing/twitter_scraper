@@ -22,6 +22,9 @@ RUN_LOG_SCHEMA_VERSION = "0.3"
 FAILURE_REASONS = {
     "login_failed": "Login did not complete successfully.",
     "manual_login_timeout": "Manual login was not confirmed before the timeout.",
+    "manual_login_session_missing": "No authenticated X session was found in the selected Chrome profile.",
+    "browser_start_failed": "Chrome or ChromeDriver could not be started.",
+    "browser_navigation_timeout": "Chrome did not finish navigating before the configured timeout.",
     "profile_navigation_failed": "The profile page did not expose tweet timeline selectors.",
     "bookmarks_navigation_failed": "The bookmarks page did not expose tweet timeline selectors.",
     "timeline_empty": "No tweet articles were detected in the loaded timeline.",
@@ -29,12 +32,24 @@ FAILURE_REASONS = {
     "partial_target_not_met": "The scrape ended with fewer items than requested.",
     "browser_window_closed": "The browser window closed or ChromeDriver lost the active web view during scraping.",
     "tweet_parse_failed": "A tweet article was detected but required fields could not be parsed.",
+    "tweet_date_unavailable": "A tweet was preserved without a fabricated timestamp.",
     "full_text_failed": "A long tweet was detected but full text extraction returned no content.",
     "article_extraction_failed": "An X Article was detected but article content extraction returned no content.",
     "export_failed": "Export saving failed.",
+    "user_cancelled": "The user interrupted the scrape.",
     "invalid_input": "The supplied command input failed validation.",
     "unknown_error": "An unexpected scraper error occurred.",
 }
+
+_SENSITIVE_FIELD_MARKERS = (
+    "password",
+    "cookie",
+    "token",
+    "authorization",
+    "browser_profile",
+    "profile_path",
+    "page_source",
+)
 
 
 @dataclass
@@ -62,6 +77,7 @@ class ScrapeRunLog:
         scrape_type: str = "profile",
         mode: Optional[str] = None,
         run_id: Optional[str] = None,
+        redactions: Optional[Iterable[str]] = None,
     ):
         self.run_id = run_id or str(uuid.uuid4())[:8]
         self.target = str(target or "export").lstrip("@")
@@ -72,6 +88,22 @@ class ScrapeRunLog:
         self.status = "running"
         self.events: List[ScrapeEvent] = []
         self.failure_reason: Optional[str] = None
+        self.exit_code: Optional[int] = None
+        self._redactions = [str(value) for value in (redactions or []) if value]
+
+    def _sanitize(self, value: Any, key: Optional[str] = None) -> Any:
+        if key and any(marker in key.lower() for marker in _SENSITIVE_FIELD_MARKERS):
+            return "[REDACTED]"
+        if isinstance(value, dict):
+            return {item_key: self._sanitize(item, item_key) for item_key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [self._sanitize(item) for item in value]
+        if isinstance(value, str):
+            sanitized = value
+            for secret in self._redactions:
+                sanitized = sanitized.replace(secret, "[REDACTED]")
+            return sanitized
+        return value
 
     def add_event(
         self,
@@ -82,26 +114,50 @@ class ScrapeRunLog:
         selector: Optional[str] = None,
         **details: Any,
     ) -> ScrapeEvent:
+        if reason is not None and reason not in FAILURE_REASONS:
+            raise ValueError(f"unregistered failure reason: {reason}")
         event = ScrapeEvent(
             stage=stage,
             level=level,
-            message=message,
+            message=self._sanitize(message),
             reason=reason,
             selector=selector,
-            details={k: v for k, v in details.items() if v is not None},
+            details={
+                key: self._sanitize(value, key)
+                for key, value in details.items()
+                if value is not None
+            },
         )
         self.events.append(event)
-        if level in {"error", "critical"} and reason:
+        if level in {"error", "critical"} and reason and self.failure_reason is None:
             self.failure_reason = reason
             self.status = "failed"
         return event
 
     def mark_completed(self, status: str = "completed") -> None:
-        self.status = status
+        default_exit_codes = {
+            "completed": 0,
+            "failed": 1,
+            "invalid_input": 2,
+            "partial": 3,
+            "cancelled": 130,
+        }
+        self.finalize(status, default_exit_codes.get(str(status), 1))
+
+    def finalize(self, status: Any, exit_code: Any) -> None:
+        """Finalize once so later warnings or cleanup cannot change the outcome."""
+        if self.completed_at is not None:
+            return
+        normalized_status = str(status)
+        allowed = {"completed", "partial", "cancelled", "failed", "invalid_input"}
+        if normalized_status not in allowed:
+            raise ValueError(f"unsupported run status: {normalized_status}")
+        self.status = normalized_status
+        self.exit_code = int(exit_code)
         self.completed_at = datetime.now(timezone.utc)
 
     def to_dict(self) -> Dict[str, Any]:
-        completed_at = self.completed_at or datetime.now(timezone.utc)
+        measured_at = self.completed_at or datetime.now(timezone.utc)
         return {
             "schema_version": RUN_LOG_SCHEMA_VERSION,
             "run_id": self.run_id,
@@ -109,13 +165,14 @@ class ScrapeRunLog:
             "scrape_type": self.scrape_type,
             "mode": self.mode,
             "status": self.status,
+            "exit_code": self.exit_code,
             "failure_reason": self.failure_reason,
             "failure_detail": FAILURE_REASONS.get(self.failure_reason)
             if self.failure_reason
             else None,
             "started_at": self.started_at.isoformat(),
-            "completed_at": completed_at.isoformat(),
-            "duration_seconds": round((completed_at - self.started_at).total_seconds(), 3),
+            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+            "duration_seconds": round((measured_at - self.started_at).total_seconds(), 3),
             "events": [event.to_dict() for event in self.events],
         }
 
@@ -223,7 +280,8 @@ def save_run_log(
 ) -> str:
     """Save a run log under output/<target>/logs/ atomically."""
     if run_log.completed_at is None:
-        run_log.mark_completed(run_log.status)
+        status = run_log.status if run_log.status != "running" else "failed"
+        run_log.mark_completed(status)
 
     filename = f"{run_log.run_id}_{run_log.status}_run_log.json"
     base_dir = os.path.abspath(output_dir or base_output_dir)

@@ -67,6 +67,21 @@ def tweet_sort_key(tweet: Any) -> tuple[datetime, str]:
     return normalized, str(getattr(tweet, "id", ""))
 
 
+def deduplicate_tweets(tweets: Iterable[T]) -> list[T]:
+    """Keep the first item for each stable post ID or URL."""
+    unique: list[T] = []
+    seen: set[str] = set()
+    for index, tweet in enumerate(tweets):
+        item_id = str(getattr(tweet, "id", "") or "")
+        url = str(getattr(tweet, "tweet_url", "") or "")
+        key = item_id or url or f"__unidentified_{index}"
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(tweet)
+    return unique
+
+
 @dataclass
 class DateRangeStopTracker:
     """Stop only after a stable run of old, non-pinned chronological posts."""

@@ -12,6 +12,12 @@ from config import X_LOGIN_URL
 from terminal_ui import TerminalUI
 
 
+AUTHENTICATED_X_SELECTORS = (
+    '[data-testid="AppTabBar_Home_Link"]',
+    '[data-testid="SideNav_AccountSwitcher_Button"]',
+)
+
+
 def default_browser_profile(cwd: Path | None = None) -> str:
     """Return the isolated profile used by the interactive x-scraper flow."""
     root = cwd or Path.cwd()
@@ -22,6 +28,25 @@ def is_prepared_profile(profile: Path) -> bool:
     """Return whether Chrome has initialized the isolated local profile."""
     return profile.is_dir() and (
         (profile / "Local State").is_file() or (profile / "Default").is_dir()
+    )
+
+
+def authenticated_x_ui_present(driver: object) -> bool:
+    """Confirm both an authenticated X destination and signed-in navigation UI."""
+    current_url = str(getattr(driver, "current_url", "")).lower()
+    if (
+        not current_url.startswith("https://x.com/")
+        or "/login" in current_url
+        or "/flow/" in current_url
+        or "/i/flow" in current_url
+    ):
+        return False
+    find_elements = getattr(driver, "find_elements", None)
+    if not callable(find_elements):
+        return False
+    return any(
+        bool(find_elements("css selector", selector))
+        for selector in AUTHENTICATED_X_SELECTORS
     )
 
 

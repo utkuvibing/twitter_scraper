@@ -4,6 +4,7 @@ import tempfile
 import unittest
 
 from diagnostics import (
+    FAILURE_REASONS,
     RUN_LOG_SCHEMA_VERSION,
     ScrapeRunLog,
     classify_empty_result,
@@ -11,6 +12,7 @@ from diagnostics import (
     run_selector_diagnostics,
     save_run_log,
 )
+from run_models import ExitCode, RunStatus
 
 
 class FakeDriver:
@@ -28,6 +30,55 @@ class FakeDriver:
 
 
 class DiagnosticsTests(unittest.TestCase):
+    def test_all_runtime_failure_reasons_are_registered(self):
+        expected = {
+            "manual_login_session_missing",
+            "browser_start_failed",
+            "tweet_date_unavailable",
+            "user_cancelled",
+            "export_failed",
+        }
+
+        self.assertTrue(expected.issubset(FAILURE_REASONS))
+
+    def test_first_failure_is_preserved_and_warning_cannot_overwrite_it(self):
+        run_log = ScrapeRunLog(target="example")
+        record_event(run_log, "auth", "error", "missing", reason="manual_login_session_missing")
+        record_event(run_log, "timeline", "warning", "empty", reason="timeline_empty")
+        record_event(run_log, "export", "error", "disk", reason="export_failed")
+
+        self.assertEqual(run_log.failure_reason, "manual_login_session_missing")
+
+    def test_finalize_sets_status_exit_and_completed_timestamp_only_once(self):
+        run_log = ScrapeRunLog(target="example")
+        run_log.finalize(RunStatus.PARTIAL, ExitCode.PARTIAL)
+        completed_at = run_log.completed_at
+        run_log.finalize(RunStatus.FAILED, ExitCode.FAILED)
+
+        payload = run_log.to_dict()
+        self.assertEqual(payload["status"], "partial")
+        self.assertEqual(payload["exit_code"], 3)
+        self.assertEqual(run_log.completed_at, completed_at)
+
+    def test_sensitive_values_and_fields_are_redacted_from_events(self):
+        profile = r"C:\Users\name\.sessions\x-scraper"
+        run_log = ScrapeRunLog(target="example", redactions=[profile])
+        record_event(
+            run_log,
+            "browser",
+            "error",
+            f"Could not open {profile}",
+            reason="browser_start_failed",
+            browser_profile=profile,
+            auth_token="secret-token",
+        )
+
+        payload = run_log.to_dict()
+        serialized = json.dumps(payload)
+        self.assertNotIn(profile, serialized)
+        self.assertNotIn("secret-token", serialized)
+        self.assertIn("[REDACTED]", serialized)
+
     def test_run_log_serializes_failure_reason_details(self):
         run_log = ScrapeRunLog(target="@Example", scrape_type="profile", mode="count", run_id="abc123")
         event = record_event(

@@ -92,8 +92,15 @@ class CliRequestTests(unittest.TestCase):
             )
 
     def test_rejects_headless_without_an_authorized_browser_profile(self):
-        with self.assertRaisesRegex(CliValidationError, "--browser-profile"):
-            parse_scrape_request(["scrape", "--profile", "example", "--count", "1", "--headless"])
+        missing = str(Path("missing-default-profile").resolve())
+        with (
+            patch("x_scraper_cli.default_browser_profile", return_value=missing),
+            patch("x_scraper_cli.is_prepared_profile", return_value=False),
+            self.assertRaisesRegex(CliValidationError, "--browser-profile"),
+        ):
+            parse_scrape_request(
+                ["scrape", "--profile", "example", "--count", "1", "--headless"]
+            )
 
     def test_rejects_headless_with_a_profile_directory_that_does_not_exist(self):
         missing_profile = Path("missing-authorized-profile").resolve()
@@ -126,6 +133,34 @@ class CliRequestTests(unittest.TestCase):
                     "2026-07-19",
                 ]
             )
+
+    def test_rejects_output_names_containing_a_directory(self):
+        with self.assertRaisesRegex(CliValidationError, "filename"):
+            parse_scrape_request(
+                [
+                    "scrape",
+                    "--profile",
+                    "example",
+                    "--count",
+                    "1",
+                    "--output",
+                    "../escape.json",
+                ]
+            )
+
+    def test_promotional_filter_is_forwarded_only_when_explicit(self):
+        request = parse_scrape_request(
+            [
+                "scrape",
+                "--profile",
+                "example",
+                "--count",
+                "1",
+                "--exclude-promotional-posts",
+            ]
+        )
+
+        self.assertTrue(request.exclude_promotional_posts)
 
     def test_diagnostics_accepts_x_urls_and_rejects_other_hosts(self):
         self.assertEqual(

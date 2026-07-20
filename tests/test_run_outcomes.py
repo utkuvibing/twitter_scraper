@@ -94,6 +94,31 @@ def test_short_count_is_partial_with_exit_three_and_is_exported():
     assert finalized[0][:2] == (RunStatus.PARTIAL, ExitCode.PARTIAL)
 
 
+def test_duplicate_post_ids_are_exported_once_and_do_not_fake_target_completion():
+    finalized = []
+    exported = []
+
+    def save(run_log, status, exit_code, _output_dir):
+        finalized.append((status, exit_code, run_log))
+        return "run.json"
+
+    def write(items, _request):
+        exported.extend(items)
+        return "archive.json"
+
+    with (
+        patch("x_scraper_cli._write_export", side_effect=write),
+        patch("x_scraper_cli._save_run_log", side_effect=save),
+    ):
+        code = run_cli_scrape(
+            request(2),
+            scraper_factory=Factory(OutcomeScraper([tweet("1"), tweet("1")])),
+        )
+
+    assert code == ExitCode.PARTIAL
+    assert [item.id for item in exported] == ["1"]
+
+
 def test_zero_usable_results_exit_two_without_claiming_completion():
     code, finalized = run_and_capture(OutcomeScraper([]), count=3)
 

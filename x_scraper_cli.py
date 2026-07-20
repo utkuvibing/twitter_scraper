@@ -11,18 +11,29 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from chrome_auth import default_browser_profile, open_chrome_for_x_login
+from chrome_auth import (
+    default_browser_profile,
+    is_prepared_profile,
+    open_chrome_for_x_login,
+)
 from diagnostics import ScrapeRunLog, record_event, save_run_log
 from document_generator import (
-    BASE_OUTPUT_DIR,
     create_csv_document,
+    default_output_dir,
     create_json_document,
     create_markdown_document,
     create_word_document,
 )
 from scraper import XScraper
 from run_models import ExitCode, RunStatus
-from time_utils import ensure_utc, filter_tweets_by_range, tweet_sort_key, utc_day_range, utc_now
+from time_utils import (
+    deduplicate_tweets,
+    ensure_utc,
+    filter_tweets_by_range,
+    tweet_sort_key,
+    utc_day_range,
+    utc_now,
+)
 
 
 ALLOWED_DIAGNOSTICS_HOSTS = {"x.com", "www.x.com", "twitter.com", "www.twitter.com"}
@@ -44,6 +55,7 @@ class ScrapeRequest:
     output_dir: str | None
     browser_profile: str | None
     headless: bool
+    exclude_promotional_posts: bool = False
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -66,6 +78,11 @@ def build_parser() -> argparse.ArgumentParser:
     scrape.add_argument("--output-dir", help="base directory for exports")
     scrape.add_argument("--browser-profile", help="local Chrome profile directory to reuse")
     scrape.add_argument("--headless", action="store_true", help="run Chrome without a window")
+    scrape.add_argument(
+        "--exclude-promotional-posts",
+        action="store_true",
+        help="exclude posts matching the documented promotional phrase list",
+    )
 
     login = subcommands.add_parser("login", help="prepare an X session in normal Chrome")
     login.add_argument(
@@ -136,9 +153,11 @@ def request_from_namespace(namespace: argparse.Namespace) -> ScrapeRequest:
 
     scrape_type = "bookmarks" if has_bookmarks else "profile"
     target_username = "bookmarks" if has_bookmarks else _validated_handle(namespace.profile)
-    browser_profile = _browser_profile(namespace.browser_profile)
+    browser_profile = _browser_profile(
+        namespace.browser_profile or default_browser_profile()
+    )
     if namespace.headless and (
-        browser_profile is None or not Path(browser_profile).is_dir()
+        browser_profile is None or not is_prepared_profile(Path(browser_profile))
     ):
         raise CliValidationError(
             "--headless requires --browser-profile pointing to an existing directory "
@@ -147,6 +166,8 @@ def request_from_namespace(namespace: argparse.Namespace) -> ScrapeRequest:
 
     mode_config = _mode_config(namespace)
     extension = namespace.format
+    if namespace.output and Path(namespace.output).name != namespace.output:
+        raise CliValidationError("--output must be a filename without a directory")
     output_file = namespace.output or f"{target_username}_tweets.{extension}"
     return ScrapeRequest(
         target_username=target_username,
@@ -157,6 +178,7 @@ def request_from_namespace(namespace: argparse.Namespace) -> ScrapeRequest:
         output_dir=namespace.output_dir,
         browser_profile=browser_profile,
         headless=namespace.headless,
+        exclude_promotional_posts=namespace.exclude_promotional_posts,
     )
 
 
@@ -186,9 +208,8 @@ def _save_run_log(
     exit_code: ExitCode,
     output_dir: str | None,
 ) -> str:
-    run_log.mark_completed(str(status))
-    run_log.exit_code = int(exit_code)
-    return save_run_log(run_log, BASE_OUTPUT_DIR, output_dir=output_dir)
+    run_log.finalize(status, exit_code)
+    return save_run_log(run_log, default_output_dir(), output_dir=output_dir)
 
 
 def _collect_request_tweets(scraper: XScraper, request: ScrapeRequest, run_log: ScrapeRunLog):
@@ -278,11 +299,13 @@ def run_cli_scrape(request: ScrapeRequest, scraper_factory=XScraper) -> int:
         target=request.target_username,
         scrape_type=request.scrape_type,
         mode=str(request.mode_config["mode"]),
+        redactions=[request.browser_profile] if request.browser_profile else None,
     )
     scraper = scraper_factory(
         headless=request.headless,
         run_log=run_log,
         browser_profile=request.browser_profile,
+        exclude_promotional_posts=request.exclude_promotional_posts,
     )
     try:
         scraper.start()
@@ -299,7 +322,9 @@ def run_cli_scrape(request: ScrapeRequest, scraper_factory=XScraper) -> int:
             )
             return int(ExitCode.FAILED)
 
-        tweets = _collect_request_tweets(scraper, request, run_log)
+        tweets = deduplicate_tweets(
+            _collect_request_tweets(scraper, request, run_log)
+        )
         if not tweets:
             record_event(
                 run_log,
@@ -431,6 +456,13 @@ def run_cli(
             return open_chrome_for_x_login(profile or default_browser_profile())
         if namespace.command == "scrape":
             request = request_from_namespace(namespace)
+            if request.browser_profile is None or not is_prepared_profile(
+                Path(request.browser_profile)
+            ):
+                raise CliValidationError(
+                    "no prepared X session was found; run `x-scraper login` first "
+                    "or provide a prepared --browser-profile"
+                )
             return int((scrape_runner or run_cli_scrape)(request))
         if namespace.command == "diagnostics":
             url = validate_diagnostics_url(namespace.url)

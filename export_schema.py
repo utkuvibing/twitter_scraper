@@ -11,9 +11,12 @@ import re
 import tempfile
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional
+from urllib.parse import urlparse
+
+from time_utils import ensure_utc
 
 
-EXPORT_SCHEMA_VERSION = "0.2"
+EXPORT_SCHEMA_VERSION = "1.0"
 
 _WINDOWS_RESERVED_NAMES = {
     "CON",
@@ -80,17 +83,31 @@ def _get_value(tweet: Any, key: str, default: Any = None) -> Any:
 def _date_to_iso(value: Any) -> Optional[str]:
     if value is None:
         return None
-    if hasattr(value, "isoformat"):
-        return value.isoformat()
+    if isinstance(value, datetime):
+        return ensure_utc(value).isoformat()
     if isinstance(value, str):
         return value
     return str(value)
 
 
+def normalize_media_urls(values: Iterable[Any]) -> List[str]:
+    """Return unique, valid HTTP(S) media URLs while preserving order."""
+    normalized: List[str] = []
+    seen = set()
+    for value in values:
+        url = str(value or "").strip()
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc or url in seen:
+            continue
+        seen.add(url)
+        normalized.append(url)
+    return normalized
+
+
 def normalize_tweet(tweet: Any) -> Dict[str, Any]:
     """Convert a Tweet object or dict into the public export schema."""
     tweet_url = _get_value(tweet, "tweet_url") or _get_value(tweet, "url", "")
-    media_urls = _get_value(tweet, "media_urls", []) or []
+    media_urls = normalize_media_urls(_get_value(tweet, "media_urls", []) or [])
 
     normalized = {
         "id": str(_get_value(tweet, "id", "")),
@@ -100,15 +117,18 @@ def normalize_tweet(tweet: Any) -> Dict[str, Any]:
         "url": tweet_url,
         "tweet_url": tweet_url,
         "has_media": len(media_urls) > 0,
-        "media_urls": list(media_urls),
+        "media_urls": media_urls,
         "has_article": bool(_get_value(tweet, "has_article", False)),
         "needs_full_text": bool(_get_value(tweet, "needs_full_text", False)),
-        "likes": int(_get_value(tweet, "likes", 0) or 0),
-        "retweets": int(_get_value(tweet, "retweets", 0) or 0),
-        "replies": int(_get_value(tweet, "replies", 0) or 0),
-        "views": int(_get_value(tweet, "views", 0) or 0),
     }
     return normalized
+
+
+def csv_safe(value: Any) -> Any:
+    """Prevent spreadsheet formula execution without mutating non-CSV exports."""
+    if isinstance(value, str) and value.startswith(("=", "+", "-", "@")):
+        return f"'{value}"
+    return value
 
 
 def build_export_payload(

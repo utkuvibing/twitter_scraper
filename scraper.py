@@ -44,6 +44,7 @@ from diagnostics import (
     record_event,
     run_selector_diagnostics,
 )
+from chrome_auth import authenticated_x_ui_present
 from time_utils import DateRangeStopTracker, ensure_utc, parse_x_datetime, utc_now
 
 
@@ -278,16 +279,8 @@ class XScraper:
             print("[INFO] Checking the saved X session...")
             self.driver.get(f"{X_BASE_URL}/home")
 
-            def is_authenticated(driver):
-                current_url = driver.current_url.lower()
-                return (
-                    "x.com" in current_url
-                    and "login" not in current_url
-                    and "flow" not in current_url
-                )
-
             try:
-                WebDriverWait(self.driver, 15).until(is_authenticated)
+                WebDriverWait(self.driver, 15).until(authenticated_x_ui_present)
             except TimeoutException:
                 print(
                     "[ERROR] No X session was found. Run x-scraper login to sign in using "

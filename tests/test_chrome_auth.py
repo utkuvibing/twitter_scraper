@@ -63,6 +63,9 @@ class DelayedAuthenticatedDriver:
     def get(self, url):
         self.requested_url = url
 
+    def find_elements(self, _by, _selector):
+        return [object()] if self.url_checks > 1 else []
+
     @property
     def current_url(self):
         self.url_checks += 1
