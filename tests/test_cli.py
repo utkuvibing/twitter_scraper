@@ -164,6 +164,12 @@ class CliRequestTests(unittest.TestCase):
     def test_diagnostics_runner_accepts_a_validated_url_argument(self):
         self.assertIn("url", inspect.signature(run_diagnostics_cli).parameters)
 
+    def test_diagnostics_runner_rejects_non_x_urls_before_starting_chrome(self):
+        with patch("main.XScraper") as scraper_class:
+            self.assertEqual(run_diagnostics_cli("https://example.com"), 2)
+
+        scraper_class.assert_not_called()
+
     @patch(
         "builtins.input",
         side_effect=["1", "1", "example", "1", "1", "4", ""],

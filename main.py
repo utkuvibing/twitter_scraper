@@ -31,7 +31,7 @@ def save_cli_run_log(run_log: ScrapeRunLog, status: str = "completed") -> str:
 def run_diagnostics_cli(url: str | None = None) -> int:
     """Open a browser, navigate to a user-provided URL, and check selectors."""
     run_log = ScrapeRunLog(target="diagnostics", scrape_type="diagnostics", mode="selector_check")
-    scraper = XScraper(headless=False, run_log=run_log)
+    scraper = None
     try:
         print("=" * 60)
         print("   X Selector Diagnostics")
@@ -40,6 +40,23 @@ def run_diagnostics_cli(url: str | None = None) -> int:
         if url is None:
             url = input("Kontrol edilecek URL (boş: https://x.com/home): ").strip() or "https://x.com/home"
 
+        from x_scraper_cli import CliValidationError, validate_diagnostics_url
+
+        try:
+            url = validate_diagnostics_url(url)
+        except CliValidationError as exc:
+            record_event(
+                run_log,
+                "selector_diagnostics",
+                "error",
+                f"Invalid diagnostics URL: {exc}",
+                reason="invalid_input",
+            )
+            save_cli_run_log(run_log, "failed")
+            print(f"Diagnostics input error: {exc}")
+            return 2
+
+        scraper = XScraper(headless=False, run_log=run_log)
         scraper.start()
         scraper.driver.get(url)
         input("Sayfa yüklendikten/giriş tamamlandıktan sonra ENTER'a basın...")
@@ -74,7 +91,8 @@ def run_diagnostics_cli(url: str | None = None) -> int:
         print(f"Diagnostics hatası: {e}")
         return 1
     finally:
-        scraper.stop()
+        if scraper:
+            scraper.stop()
 
 
 def get_user_input():

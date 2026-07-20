@@ -32,6 +32,7 @@ FAILURE_REASONS = {
     "full_text_failed": "A long tweet was detected but full text extraction returned no content.",
     "article_extraction_failed": "An X Article was detected but article content extraction returned no content.",
     "export_failed": "Export saving failed.",
+    "invalid_input": "The supplied command input failed validation.",
     "unknown_error": "An unexpected scraper error occurred.",
 }
 
