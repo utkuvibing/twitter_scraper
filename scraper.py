@@ -412,6 +412,8 @@ class XScraper:
                 context_text = social_context.text.lower()
                 if "replying" in context_text:
                     return None  # Reply, atla
+                if self._is_repost_context(context_text):
+                    return None  # Repost, atla
                 # "Pinned" / "Sabitlenmiş" ise normal tweet olarak devam et
             except NoSuchElementException:
                 pass  # socialContext yok, normal tweet
@@ -482,24 +484,7 @@ class XScraper:
                     has_show_more = True
 
             # Article kontrolü
-            has_article = False
-            try:
-                # Yöntem 1: "Article" text'i ara (𝕏 Article etiketi)
-                article_labels = article.find_elements(By.XPATH,
-                    './/*[contains(text(), "Article") or contains(text(), "article")]')
-                if article_labels:
-                    has_article = True
-
-                # Yöntem 2: Card içinde uzun başlık varsa article olabilir
-                if not has_article:
-                    cards = article.find_elements(By.CSS_SELECTOR, '[data-testid="card.wrapper"]')
-                    for card in cards:
-                        headings = card.find_elements(By.XPATH, './/span[string-length(text()) > 30]')
-                        if headings:
-                            has_article = True
-                            break
-            except:
-                pass
+            has_article = self._tweet_has_article_attachment(article)
 
             if has_article:
                 print(f"      [ARTICLE] Article tespit edildi")
@@ -592,6 +577,50 @@ class XScraper:
                 reason="tweet_parse_failed",
             )
             return None
+
+    def _is_repost_context(self, context_text: str) -> bool:
+        """Return True when X's social context indicates this card is a repost."""
+        normalized = (context_text or "").lower()
+        repost_markers = (
+            "reposted",
+            "retweeted",
+            " repost",
+            " retweet",
+            "repostladı",
+            "yeniden yayınladı",
+        )
+        return any(marker in normalized for marker in repost_markers)
+
+    def _tweet_has_article_attachment(self, article) -> bool:
+        """Detect X Article attachments without matching ordinary tweet text."""
+        try:
+            article_labels = article.find_elements(
+                By.XPATH,
+                (
+                    './/*[not(ancestor-or-self::*[@data-testid="tweetText"]) '
+                    'and text()[contains(translate(., "ABCDEFGHIJKLMNOPQRSTUVWXYZ", '
+                    '"abcdefghijklmnopqrstuvwxyz"), "article")]]'
+                ),
+            )
+            if article_labels:
+                return True
+
+            cards = article.find_elements(By.CSS_SELECTOR, '[data-testid="card.wrapper"]')
+            for card in cards:
+                card_text = (card.text or "").lower()
+                if "article" in card_text:
+                    return True
+
+                headings = card.find_elements(
+                    By.XPATH,
+                    './/span[string-length(normalize-space(text())) > 30]'
+                )
+                if headings:
+                    return True
+        except Exception:
+            pass
+
+        return False
 
     def _get_full_tweet_text(self, tweet_url: str) -> str:
         """
