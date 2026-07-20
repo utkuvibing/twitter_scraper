@@ -1,14 +1,17 @@
+import io
+import inspect
 import unittest
 from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from main import get_user_input, main
+from main import get_user_input, main, run_diagnostics_cli
 from scraper import Tweet, XScraper
 from x_scraper_cli import (
     CliValidationError,
     parse_scrape_request,
+    run_cli,
     run_cli_scrape,
     validate_diagnostics_url,
 )
@@ -138,6 +141,29 @@ class CliRequestTests(unittest.TestCase):
         self.assertEqual(run_cli.call_args.args[0], ["--help"])
         self.assertIn("diagnostics_runner", run_cli.call_args.kwargs)
 
+    def test_cli_version_is_browser_free(self):
+        with (
+            patch("x_scraper_cli.run_cli_scrape", side_effect=AssertionError),
+            patch("sys.stdout", new_callable=io.StringIO) as stdout,
+        ):
+            self.assertEqual(run_cli(["--version"]), 0)
+
+        self.assertIn("1.0.0", stdout.getvalue())
+
+    def test_legacy_diagnostics_flag_maps_to_the_diagnostics_command(self):
+        observed_urls = []
+
+        result = run_cli(
+            ["--diagnostics"],
+            diagnostics_runner=lambda url: observed_urls.append(url) or 3,
+        )
+
+        self.assertEqual(result, 3)
+        self.assertEqual(observed_urls, ["https://x.com/home"])
+
+    def test_diagnostics_runner_accepts_a_validated_url_argument(self):
+        self.assertIn("url", inspect.signature(run_diagnostics_cli).parameters)
+
     @patch(
         "builtins.input",
         side_effect=["1", "1", "example", "1", "1", "4", ""],
@@ -206,21 +232,42 @@ class CliRequestTests(unittest.TestCase):
 
         self.assertIn(f"--user-data-dir={profile}", options.arguments)
 
+    def test_setup_driver_keeps_chrome_security_and_automation_signals_intact(self):
+        options = RecordingChromeOptions()
+        driver = FakeChromeDriver()
+        with (
+            patch("scraper.Options", return_value=options),
+            patch("scraper.ChromeDriverManager") as manager,
+            patch("scraper.Service"),
+            patch("scraper.webdriver.Chrome", return_value=driver),
+        ):
+            manager.return_value.install.return_value = "chromedriver"
+            XScraper()._setup_driver()
+
+        self.assertNotIn("--no-sandbox", options.arguments)
+        self.assertNotIn("excludeSwitches", options.experimental_options)
+        self.assertNotIn("useAutomationExtension", options.experimental_options)
+        self.assertEqual(driver.cdp_commands, [])
+
 
 class RecordingChromeOptions:
     def __init__(self):
         self.arguments = []
+        self.experimental_options = {}
 
     def add_argument(self, value):
         self.arguments.append(value)
 
-    def add_experimental_option(self, *_args):
-        pass
+    def add_experimental_option(self, name, value):
+        self.experimental_options[name] = value
 
 
 class FakeChromeDriver:
+    def __init__(self):
+        self.cdp_commands = []
+
     def execute_cdp_cmd(self, *_args):
-        pass
+        self.cdp_commands.append(_args)
 
     def implicitly_wait(self, *_args):
         pass

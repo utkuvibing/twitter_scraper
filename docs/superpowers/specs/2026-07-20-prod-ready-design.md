@@ -2,7 +2,7 @@
 
 ## Context
 
-The project is a Python/Selenium CLI for personal, authorized X/Twitter archiving. The current extraction and export layers have browser-free tests, but the product is difficult to automate or publish: it has only prompt-driven input, no installable package metadata or console command, no CSV export, inconsistent user-facing text, and no clear release contract.
+The project is a Python/Selenium CLI for personal, authorized X/Twitter archiving. The current extraction and export layers have browser-free tests, but the product is difficult to automate or publish: it has only prompt-driven input, no installable package metadata or console command, no CSV export, and no clear release contract.
 
 ## Goals
 
@@ -69,7 +69,7 @@ Argument validation happens before browser startup. Diagnostics accepts only `ht
 
 ### Packaging and release contract
 
-`pyproject.toml` declares Python 3.11+, runtime dependencies, a console script, package metadata, and repository links. A root MIT `LICENSE`, `.gitignore` coverage for test/build artifacts, and expanded README sections document installation, commands, security expectations, Chrome requirements, supported platforms, and release verification. CI runs the full unit suite, bytecode compilation, and a smoke check for `--help` and `--version` on Python 3.11 and 3.12.
+`pyproject.toml` declares Python 3.11+, runtime dependencies, a console script, package metadata, and repository links. A root MIT `LICENSE`, `.gitignore` coverage for test/build artifacts, and expanded README sections document installation, commands, security expectations, Chrome requirements, supported platforms, and release verification. The existing Turkish interactive prompts remain supported; the new command surface and README are English. CI runs the full unit suite, bytecode compilation, and a smoke check for `--help` and `--version` on Python 3.11 and 3.12.
 
 ## Test Strategy
 

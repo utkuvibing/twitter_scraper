@@ -277,7 +277,6 @@ git commit -m "feat: add CSV tweet exports"
 - Modify: `README.md`
 - Modify: `.github/workflows/ci.yml`
 - Modify: `requirements.txt`
-- Modify: `main.py`, `scraper.py`, and `document_generator.py` user-facing prompts/messages only
 - Modify: `tests/test_cli.py`
 
 **Interfaces:**
@@ -320,7 +319,7 @@ dependencies = [
 x-scraper = "main:main"
 ```
 
-Replace corrupted user-facing strings with clear English text, retaining behavior. In CI, test Python 3.11 and 3.12, run the full pytest suite and compilation, build a wheel/sdist, install the wheel into a clean virtual environment, then run `x-scraper --help` and `x-scraper --version`. Include `prod-ready` in push branch triggers.
+Retain the existing clear Turkish interactive prompts and add English help text for the non-interactive command surface. In CI, test Python 3.11 and 3.12, run the full pytest suite and compilation, build a wheel/sdist, install the wheel into a clean virtual environment, then run `x-scraper --help` and `x-scraper --version`. Include `prod-ready` in push branch triggers.
 
 - [ ] **Step 4: Run local packaging and smoke tests**
 

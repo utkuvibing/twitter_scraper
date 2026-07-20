@@ -28,7 +28,7 @@ def save_cli_run_log(run_log: ScrapeRunLog, status: str = "completed") -> str:
     return path
 
 
-def run_diagnostics_cli() -> int:
+def run_diagnostics_cli(url: str | None = None) -> int:
     """Open a browser, navigate to a user-provided URL, and check selectors."""
     run_log = ScrapeRunLog(target="diagnostics", scrape_type="diagnostics", mode="selector_check")
     scraper = XScraper(headless=False, run_log=run_log)
@@ -37,7 +37,8 @@ def run_diagnostics_cli() -> int:
         print("   X Selector Diagnostics")
         print("=" * 60)
         print("Browser açılacak ve seçilen sayfadaki temel X selector'ları kontrol edilecek.")
-        url = input("Kontrol edilecek URL (boş: https://x.com/home): ").strip() or "https://x.com/home"
+        if url is None:
+            url = input("Kontrol edilecek URL (boş: https://x.com/home): ").strip() or "https://x.com/home"
 
         scraper.start()
         scraper.driver.get(url)

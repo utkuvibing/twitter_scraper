@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "x-scraper-cli"
+version = "1.0.0"
+description = "A personal, authorized X/Twitter archival CLI built with Selenium"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+  { name = "utkuvibing" },
+]
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Environment :: Console",
+  "Intended Audience :: End Users/Desktop",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Internet :: WWW/HTTP :: Dynamic Content",
+]
+dependencies = [
+  "selenium>=4.15,<5",
+  "webdriver-manager>=4.0.1,<5",
+  "python-docx>=1.1,<2",
+]
+
+[project.urls]
+Homepage = "https://github.com/utkuvibing/twitter_scraper"
+Repository = "https://github.com/utkuvibing/twitter_scraper"
+Issues = "https://github.com/utkuvibing/twitter_scraper/issues"
+
+[project.scripts]
+x-scraper = "main:main"
+
+[tool.setuptools]
+py-modules = [
+  "config",
+  "diagnostics",
+  "document_generator",
+  "export_schema",
+  "main",
+  "scraper",
+  "x_scraper_cli",
+]

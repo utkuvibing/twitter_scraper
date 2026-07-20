@@ -1,138 +1,120 @@
-# X Scraper
+# X Scraper CLI
 
-Python/Selenium CLI scraper for personal X/Twitter archiving. It can collect public profile posts or authenticated bookmarks, then export results as JSON, Markdown, or DOCX.
+`x-scraper` is a Python/Selenium command-line tool for personal, authorized X/Twitter archiving. It collects public profile posts or the signed-in user's bookmarks and exports them as JSON, CSV, Markdown, or DOCX.
 
-This repository is intentionally CLI-only. The previous Tauri/React desktop prototype was removed so the project stays easier to run, test, and maintain.
+The project automates the X web UI; it does not use a private API, bypass access controls, work around rate limits, or store credentials. X can change its UI at any time, so treat every scrape as best-effort and verify important exports.
 
-## Capabilities
+## Requirements
 
-- Profile scraping for public posts
-- Bookmark scraping for the signed-in user's saved posts
-- Count, last-N-days, and date-range scrape modes
-- Best-effort expansion for long tweets and X Articles
-- JSON, Markdown, and Word export
-- Versioned JSON export schema (`schema_version: "0.2"`)
-- Safer output handling with sanitized filenames and per-target output folders
-- Selector diagnostics and structured run logs (`schema_version: "0.3"`)
+- Python 3.11 or newer
+- A current Chrome installation
+- An X account only when using bookmarks or a local authenticated browser profile
 
-## Limits
-
-This project automates the X web UI through Selenium. X changes its DOM, labels, login flows, and timeline behavior frequently, so selectors and long-form extraction can break without warning. Treat scraped data as best-effort and verify important exports manually.
-
-This project does not bypass access controls, does not include credentials, and should only be used for educational or personal archiving workflows that you are authorized to perform.
+Windows, macOS, and Linux are supported where Chrome and ChromeDriver are available. `webdriver-manager` retrieves a compatible driver during the first browser run.
 
 ## Install
 
 ```bash
 git clone https://github.com/utkuvibing/twitter_scraper.git
 cd twitter_scraper
-pip install -r requirements.txt
+python -m pip install --upgrade pip
+python -m pip install .
+x-scraper --help
 ```
 
-Chrome must be installed. `webdriver-manager` downloads the matching ChromeDriver.
+To run directly from a source checkout, use `python main.py` instead of `x-scraper`.
 
-## CLI Usage
+## Quick start
+
+Run without arguments for the interactive Turkish-language wizard. It defaults to manual browser login and guides you through the source, scope, and export format.
 
 ```bash
-python main.py
+x-scraper
 ```
 
-The CLI prompts for:
-
-1. Login method
-2. Profile or bookmarks source
-3. Count, date range, or last-N-days mode
-4. JSON, Markdown, or DOCX export
-
-Exports are written under `output/<target>/` by default. Each scrape also writes a run log under `output/<target>/logs/`.
-
-## Selector Diagnostics
-
-Run selector diagnostics without starting a scrape:
+For repeatable scripts, use the non-interactive command. It always opens Chrome for manual login unless you explicitly supply a previously authorized browser profile.
 
 ```bash
-python main.py --diagnostics
+# Archive 50 public posts as JSON.
+x-scraper scrape --profile example --count 50 --format json
+
+# Archive posts from the last 7 days as CSV in a chosen output directory.
+x-scraper scrape --profile example --days 7 --format csv --output-dir exports
+
+# Archive a date range as Markdown.
+x-scraper scrape --profile example --from 2026-07-01 --to 2026-07-20 --format md
+
+# Archive the current account's bookmarks.
+x-scraper scrape --bookmarks --count 100 --format docx
 ```
 
-The CLI opens Chrome, lets you navigate or log in, then checks the currently loaded page for core X selectors such as login fields, tweet articles, tweet text, status links, long-tweet controls, and article links. A diagnostics run writes a structured log under `output/diagnostics/logs/`.
+Exactly one source (`--profile` or `--bookmarks`) and one collection mode (`--count`, `--days`, or `--from` plus `--to`) are required. Handles, dates, limits, output formats, and diagnostics URLs are checked before Chrome starts.
 
-Diagnostics only reports what is detectable on the current page. It does not guarantee a full scrape will succeed, and it does not bypass login, rate limits, private content, or platform restrictions.
+## Reusing an authorized Chrome profile
 
-## Run Logs
+Use `--browser-profile` only for a local Chrome profile directory you control. First run it with a visible browser, sign in yourself, then reuse it for a future run. The profile may contain account session data: keep it private and never commit or share it.
 
-Every CLI scrape writes a JSON run log under:
+```bash
+# First run: Chrome opens and you sign in yourself.
+x-scraper scrape --profile example --count 10 --browser-profile .sessions/x-scraper
+
+# Later: use the same authorized profile without opening a window.
+x-scraper scrape --profile example --count 10 --headless --browser-profile .sessions/x-scraper
+```
+
+Headless mode rejects a missing profile directory to avoid launching a new unauthenticated session. The CLI does not accept passwords as arguments and does not write credentials to exports or run logs.
+
+## Exports and run logs
+
+Exports are written to `output/<target>/` by default, or below `--output-dir` when supplied. Filenames and target folders are sanitized and writes are atomic.
+
+- JSON: versioned schema (`schema_version: "0.2"`) for programmatic use
+- CSV: UTF-8 with BOM for spreadsheet applications
+- Markdown: readable archive with links
+- DOCX: Word document archive
+
+Every scrape and diagnostics run also writes a structured JSON log to `output/<target>/logs/`. Logs record stages, selector diagnostics, timings, failure reasons, and export paths; they do not contain credentials or browser-profile paths.
+
+The CLI returns `0` for a completed export, `1` for a login/runtime/export error, and `2` when validation fails or no posts are collected.
+
+## Selector diagnostics
+
+Run diagnostics when X changes its UI or a scrape returns no results:
+
+```bash
+x-scraper diagnostics --url https://x.com/home
+```
+
+Diagnostics only accepts HTTPS X/Twitter URLs and reports whether core selectors are visible on the page. It does not guarantee that a full scrape will succeed. The former `python main.py --diagnostics` command remains supported.
+
+## Development and release checks
+
+```bash
+python -m pytest
+python -m compileall main.py x_scraper_cli.py scraper.py document_generator.py export_schema.py diagnostics.py config.py
+python main.py --help
+python main.py --version
+python -m build
+```
+
+GitHub Actions runs the unit suite, compile check, package build, and clean-environment console-command smoke test on Python 3.11 and 3.12.
+
+## Project structure
 
 ```text
-output/<target>/logs/
+main.py                 Interactive compatibility entry point
+x_scraper_cli.py        Validated non-interactive command layer
+scraper.py              Selenium extraction and browser setup
+document_generator.py   JSON, CSV, Markdown, and DOCX writers
+export_schema.py        Versioned JSON schema and safe atomic file helpers
+diagnostics.py          Selector checks and structured run logs
+tests/                  Browser-free validation suite
 ```
 
-Run logs include:
+## Responsible use
 
-- scrape stage (`login`, `profile_navigation`, `bookmarks_navigation`, `timeline_loading`, `tweet_parsing`, `full_text_extraction`, `article_extraction`, `export_saving`)
-- severity level
-- failure reason codes such as `login_failed`, `profile_navigation_failed`, `timeline_empty`, `tweet_parse_failed`, `full_text_failed`, `article_extraction_failed`, or `export_failed`
-- selector names where a selector was involved
-- timing and diagnostic details
-
-These logs are intended for debugging X DOM changes and incomplete runs. They do not contain credentials.
-
-## JSON Export Schema
-
-JSON exports use a stable top-level shape:
-
-```json
-{
-  "schema_version": "0.2",
-  "source": "x.com",
-  "scrape_type": "profile",
-  "user": "@example",
-  "target": "example",
-  "exported_at": "2026-05-12T10:30:00+00:00",
-  "total_tweets": 1,
-  "tweets": [
-    {
-      "id": "1234567890",
-      "text": "Tweet content",
-      "date": "2026-05-12T10:30:00+00:00",
-      "date_str": "May 12, 2026",
-      "url": "https://x.com/example/status/1234567890",
-      "tweet_url": "https://x.com/example/status/1234567890",
-      "has_media": false,
-      "media_urls": [],
-      "has_article": false,
-      "needs_full_text": false,
-      "likes": 0,
-      "retweets": 0,
-      "replies": 0,
-      "views": 0
-    }
-  ]
-}
-```
-
-`url` is kept for compatibility; `tweet_url` is the explicit canonical field used by current exports.
-
-## Validation
-
-Run the browser-free validation suite:
-
-```bash
-python -m unittest discover -s tests
-python -m compileall main.py scraper.py document_generator.py export_schema.py diagnostics.py config.py
-```
-
-## Project Structure
-
-```text
-main.py                 Interactive Python CLI
-scraper.py              Selenium scraper
-config.py               Selector definitions and runtime constants
-document_generator.py   JSON/Markdown/DOCX export writers
-export_schema.py        Export schema and safe write helpers
-diagnostics.py          Selector diagnostics and structured run logs
-tests/                  Browser-free validation tests
-```
+Use this project only for content and accounts you are authorized to access, and comply with X's terms, applicable law, and privacy obligations. Do not use it to evade access controls, collect private data, or mass-harvest content.
 
 ## License
 
-MIT
+[MIT](LICENSE)

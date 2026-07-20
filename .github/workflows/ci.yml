@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - prod-ready
       - "codex/**"
   pull_request:
 
@@ -12,6 +13,11 @@ jobs:
     name: Python validation
     runs-on: ubuntu-latest
 
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -19,15 +25,30 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python-version }}
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          python -m pip install -r requirements.txt build
 
       - name: Run unit tests
         run: python -m unittest discover -s tests
 
       - name: Compile Python modules
-        run: python -m compileall main.py scraper.py document_generator.py export_schema.py diagnostics.py config.py
+        run: python -m compileall main.py x_scraper_cli.py scraper.py document_generator.py export_schema.py diagnostics.py config.py
+
+      - name: Verify browser-free CLI commands
+        run: |
+          python main.py --help
+          python main.py --version
+
+      - name: Build package
+        run: python -m build
+
+      - name: Smoke test installed wheel
+        run: |
+          python -m venv .smoke-venv
+          .smoke-venv/bin/python -m pip install dist/*.whl
+          .smoke-venv/bin/x-scraper --help
+          .smoke-venv/bin/x-scraper --version

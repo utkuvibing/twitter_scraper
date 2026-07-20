@@ -24,6 +24,7 @@ from scraper import XScraper
 
 ALLOWED_DIAGNOSTICS_HOSTS = {"x.com", "www.x.com", "twitter.com", "www.twitter.com"}
 OUTPUT_FORMATS = ("json", "md", "docx", "csv")
+VERSION = "1.0.0"
 
 
 class CliValidationError(ValueError):
@@ -47,6 +48,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="x-scraper",
         description="Archive public X posts or your authorized bookmarks.",
     )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {VERSION}")
     subcommands = parser.add_subparsers(dest="command")
 
     scrape = subcommands.add_parser("scrape", help="run one validated scrape")
@@ -317,6 +319,8 @@ def run_cli(
 ) -> int:
     """Run a command without starting Chrome until its inputs are validated."""
     args = list(argv or [])
+    if args == ["--diagnostics"]:
+        args = ["diagnostics"]
     parser = build_parser()
     try:
         namespace = parser.parse_args(args)

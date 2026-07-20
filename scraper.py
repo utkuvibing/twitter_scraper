@@ -35,7 +35,6 @@ from config import (
     SCROLL_PAUSE_MIN,
     SCROLL_PAUSE_MAX,
     CHROME_OPTIONS,
-    USER_AGENT,
     XPATHS,
 )
 from diagnostics import (
@@ -98,26 +97,8 @@ class XScraper:
         if self.headless:
             chrome_options.add_argument("--headless=new")
 
-        chrome_options.add_argument(f"user-agent={USER_AGENT}")
-
-        # Automation detection'ı gizle
-        chrome_options.add_experimental_option("excludeSwitches", ["enable-automation"])
-        chrome_options.add_experimental_option("useAutomationExtension", False)
-
         service = Service(ChromeDriverManager().install())
         self.driver = webdriver.Chrome(service=service, options=chrome_options)
-
-        # Automation flag'ini gizle
-        self.driver.execute_cdp_cmd(
-            "Page.addScriptToEvaluateOnNewDocument",
-            {
-                "source": """
-                Object.defineProperty(navigator, 'webdriver', {
-                    get: () => undefined
-                })
-            """
-            },
-        )
 
         self.driver.implicitly_wait(IMPLICIT_WAIT)
         self.driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT)

@@ -6,6 +6,11 @@ __pycache__/
 .Python
 *.egg-info/
 build/
+dist/
+.release-smoke/
+.smoke-venv/
+.pytest_cache/
+.coverage
 
 # Virtual environments
 .env
