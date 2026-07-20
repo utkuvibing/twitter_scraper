@@ -18,6 +18,13 @@ def default_browser_profile(cwd: Path | None = None) -> str:
     return str((root / ".sessions" / "x-scraper").resolve())
 
 
+def is_prepared_profile(profile: Path) -> bool:
+    """Return whether Chrome has initialized the isolated local profile."""
+    return profile.is_dir() and (
+        (profile / "Local State").is_file() or (profile / "Default").is_dir()
+    )
+
+
 def find_chrome_executable() -> str | None:
     """Locate a normal Chrome executable without relying on WebDriver."""
     for name in ("chrome", "google-chrome"):

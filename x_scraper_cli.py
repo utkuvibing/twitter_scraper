@@ -21,6 +21,7 @@ from document_generator import (
     create_word_document,
 )
 from scraper import XScraper
+from run_models import ExitCode, RunStatus
 from time_utils import ensure_utc, filter_tweets_by_range, tweet_sort_key, utc_day_range, utc_now
 
 
@@ -179,8 +180,14 @@ def validate_diagnostics_url(value: str) -> str:
     return parsed.geturl()
 
 
-def _save_run_log(run_log: ScrapeRunLog, status: str, output_dir: str | None) -> str:
-    run_log.mark_completed(status)
+def _save_run_log(
+    run_log: ScrapeRunLog,
+    status: RunStatus,
+    exit_code: ExitCode,
+    output_dir: str | None,
+) -> str:
+    run_log.mark_completed(str(status))
+    run_log.exit_code = int(exit_code)
     return save_run_log(run_log, BASE_OUTPUT_DIR, output_dir=output_dir)
 
 
@@ -266,7 +273,7 @@ def _write_export(tweets, request: ScrapeRequest) -> str:
 
 
 def run_cli_scrape(request: ScrapeRequest, scraper_factory=XScraper) -> int:
-    """Run a validated scrape with manual browser login and structured logging."""
+    """Run one validated scrape and keep export, log, and exit outcomes aligned."""
     run_log = ScrapeRunLog(
         target=request.target_username,
         scrape_type=request.scrape_type,
@@ -287,8 +294,10 @@ def run_cli_scrape(request: ScrapeRequest, scraper_factory=XScraper) -> int:
                 "Manual login did not complete",
                 reason="manual_login_timeout",
             )
-            _save_run_log(run_log, "failed", request.output_dir)
-            return 1
+            _save_run_log(
+                run_log, RunStatus.FAILED, ExitCode.FAILED, request.output_dir
+            )
+            return int(ExitCode.FAILED)
 
         tweets = _collect_request_tweets(scraper, request, run_log)
         if not tweets:
@@ -299,8 +308,10 @@ def run_cli_scrape(request: ScrapeRequest, scraper_factory=XScraper) -> int:
                 "Scrape completed without collected tweets",
                 reason="timeline_empty",
             )
-            _save_run_log(run_log, "failed", request.output_dir)
-            return 2
+            _save_run_log(
+                run_log, RunStatus.FAILED, ExitCode.NO_RESULTS, request.output_dir
+            )
+            return int(ExitCode.NO_RESULTS)
 
         tweets.sort(key=tweet_sort_key, reverse=True)
         output_path = _write_export(tweets, request)
@@ -313,20 +324,87 @@ def run_cli_scrape(request: ScrapeRequest, scraper_factory=XScraper) -> int:
             format=request.output_format,
             total_tweets=len(tweets),
         )
-        _save_run_log(run_log, "completed", request.output_dir)
-        print(f"Saved {len(tweets)} posts to: {output_path}")
-        return 0
+        requested_count = (
+            int(request.mode_config["count"])
+            if request.mode_config["mode"] == "count"
+            else None
+        )
+        partial = requested_count is not None and len(tweets) < requested_count
+        if partial:
+            record_event(
+                run_log,
+                "timeline_loading",
+                "warning",
+                "The requested post count was not reached",
+                reason="partial_target_not_met",
+                requested=requested_count,
+                collected=len(tweets),
+            )
+            _save_run_log(
+                run_log, RunStatus.PARTIAL, ExitCode.PARTIAL, request.output_dir
+            )
+            print(
+                f"Partial export saved ({len(tweets)}/{requested_count} posts): "
+                f"{output_path}"
+            )
+            return int(ExitCode.PARTIAL)
+
+        _save_run_log(
+            run_log, RunStatus.COMPLETED, ExitCode.COMPLETED, request.output_dir
+        )
+        print(f"Completed: saved {len(tweets)} posts to: {output_path}")
+        return int(ExitCode.COMPLETED)
+    except KeyboardInterrupt:
+        tweets = list(getattr(scraper, "tweets_collected", []) or [])
+        if tweets:
+            tweets.sort(key=tweet_sort_key, reverse=True)
+            try:
+                output_path = _write_export(tweets, request)
+            except OSError as exc:
+                record_event(
+                    run_log,
+                    "export_saving",
+                    "error",
+                    f"Cancelled-run export failed: {exc}",
+                    reason="export_failed",
+                )
+                _save_run_log(
+                    run_log, RunStatus.FAILED, ExitCode.FAILED, request.output_dir
+                )
+                return int(ExitCode.FAILED)
+            record_event(
+                run_log,
+                "export_saving",
+                "warning",
+                "Collected posts were saved after user cancellation",
+                path=output_path,
+                total_tweets=len(tweets),
+            )
+        record_event(
+            run_log,
+            "cli_scrape",
+            "warning",
+            "Scrape cancelled by user",
+            reason="user_cancelled",
+            collected=len(tweets),
+        )
+        _save_run_log(
+            run_log, RunStatus.CANCELLED, ExitCode.CANCELLED, request.output_dir
+        )
+        print("Cancelled by user.", file=sys.stderr)
+        return int(ExitCode.CANCELLED)
     except Exception as exc:
+        reason = "export_failed" if isinstance(exc, OSError) else "unknown_error"
         record_event(
             run_log,
             "cli_scrape",
             "error",
             f"Scrape failed: {exc}",
-            reason="unknown_error",
+            reason=reason,
         )
-        _save_run_log(run_log, "failed", request.output_dir)
+        _save_run_log(run_log, RunStatus.FAILED, ExitCode.FAILED, request.output_dir)
         print(f"error: scrape failed: {exc}", file=sys.stderr)
-        return 1
+        return int(ExitCode.FAILED)
     finally:
         scraper.stop()
 

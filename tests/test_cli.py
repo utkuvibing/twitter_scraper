@@ -201,7 +201,7 @@ class CliRequestTests(unittest.TestCase):
 
     @patch(
         "builtins.input",
-        side_effect=["1", "1", "example", "1", "1", "4", ""],
+        side_effect=["1", "example", "1", "1", "4", ""],
     )
     def test_interactive_wizard_supports_csv_exports(self, _input):
         config = get_user_input()
@@ -212,35 +212,27 @@ class CliRequestTests(unittest.TestCase):
             config["browser_profile"],
             str((Path.cwd() / ".sessions" / "x-scraper").resolve()),
         )
-        self.assertTrue(config["prepare_browser_profile"])
+        self.assertNotIn("x_password", config)
 
     @patch(
         "builtins.input",
-        side_effect=["1", "1", "example", "1", "1", "4", ""],
+        side_effect=["1", "example", "1", "1", "4", ""],
     )
     def test_interactive_wizard_prepares_and_reuses_the_browser_profile(self, _input):
-        tweet = Tweet(
-            id="1",
-            text="archived post",
-            date=datetime(2026, 7, 20),
-            date_str="July 20, 2026",
-            media_urls=[],
-            tweet_url="https://x.com/example/status/1",
-        )
-        scraper = FakeScraper([tweet])
         expected_profile = str((Path.cwd() / ".sessions" / "x-scraper").resolve())
 
         with (
+            patch("main.is_prepared_profile", return_value=False),
             patch("main.open_chrome_for_x_login", create=True, return_value=0) as open_chrome,
-            patch("main.XScraper", return_value=scraper) as scraper_class,
-            patch("main.create_csv_document", return_value="output/example/example_tweets.csv"),
-            patch("main.save_cli_run_log"),
+            patch("main.run_cli_scrape", return_value=0) as shared_run,
             patch("main.ask_continue", return_value=False),
         ):
             self.assertEqual(run_interactive(), 0)
 
         open_chrome.assert_called_once_with(expected_profile)
-        self.assertEqual(scraper_class.call_args.kwargs["browser_profile"], expected_profile)
+        request = shared_run.call_args.args[0]
+        self.assertEqual(request.browser_profile, expected_profile)
+        self.assertEqual(request.output_format, "csv")
 
     def test_cli_scrape_forwards_profile_and_exports_collected_tweets(self):
         profile = Path("test-profile").resolve()
