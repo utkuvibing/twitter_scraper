@@ -19,6 +19,7 @@ class ChromeAuthTests(unittest.TestCase):
         command = run.call_args.args[0]
         self.assertEqual(command[0], "chrome.exe")
         self.assertIn(f"--user-data-dir={profile}", command)
+        self.assertIn("--disable-background-mode", command)
         self.assertIn("https://x.com/i/flow/login", command)
 
     def test_manual_login_refuses_google_oauth_in_a_webdriver_window(self):

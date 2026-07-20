@@ -53,12 +53,21 @@ def open_chrome_for_x_login(browser_profile: str) -> int:
     profile = Path(browser_profile).expanduser()
     try:
         profile.parent.mkdir(parents=True, exist_ok=True)
-        ui.status("info", "Chrome is opening. Sign in to X, then close every Chrome window to continue.")
+        ui.status(
+            "info",
+            "Chrome is opening. Sign in to X, then close this x-scraper Chrome window to continue.",
+        )
         subprocess.run(
-            [chrome, f"--user-data-dir={browser_profile}", X_LOGIN_URL],
+            [
+                chrome,
+                "--disable-background-mode",
+                f"--user-data-dir={browser_profile}",
+                X_LOGIN_URL,
+            ],
             check=False,
         )
     except OSError as exc:
         ui.status("error", f"Chrome could not start: {exc}")
         return 1
+    ui.status("success", "Chrome session is ready. Starting x-scraper.")
     return 0
