@@ -198,6 +198,7 @@ def create_json_document(
     output_path: str,
     target_username: str,
     output_dir: Optional[str] = None,
+    scrape_type: str = "profile",
 ) -> str:
     """
     Tweetleri JSON formatında kaydet (MCP-ready)
@@ -207,11 +208,12 @@ def create_json_document(
         output_path: Çıktı dosya yolu
         target_username: Kullanıcı adı
         output_dir: Özel output dizini (None ise default output kullanılır)
+        scrape_type: Export metadata source type ("profile" or "bookmarks")
 
     Returns:
         Dosya yolu
     """
-    data = build_export_payload(tweets, target_username)
+    data = build_export_payload(tweets, target_username, scrape_type=scrape_type)
 
     full_path = resolve_output_path(
         target_username, output_path, ".json", BASE_OUTPUT_DIR, output_dir

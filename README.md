@@ -1,23 +1,23 @@
 # X Scraper
 
-Python/Selenium scraper for personal X/Twitter archiving, with an interactive CLI and a Tauri desktop interface. It can collect public profile posts or authenticated bookmarks, then export results as JSON, Markdown, or DOCX.
+Python/Selenium CLI scraper for personal X/Twitter archiving. It can collect public profile posts or authenticated bookmarks, then export results as JSON, Markdown, or DOCX.
 
-## Current Capabilities
+This repository is intentionally CLI-only. The previous Tauri/React desktop prototype was removed so the project stays easier to run, test, and maintain.
+
+## Capabilities
 
 - Profile scraping for public posts
 - Bookmark scraping for the signed-in user's saved posts
 - Count, last-N-days, and date-range scrape modes
 - Best-effort expansion for long tweets and X Articles
 - JSON, Markdown, and Word export
-- Session cookie reuse in the desktop sidecar
-- Pause, resume, cancel, and partial-result handling in supported flows
 - Versioned JSON export schema (`schema_version: "0.2"`)
 - Safer output handling with sanitized filenames and per-target output folders
 - Selector diagnostics and structured run logs (`schema_version: "0.3"`)
 
-## Important Limits
+## Limits
 
-This project automates the X web UI through Selenium. X changes its DOM, labels, and login flows frequently, so selectors and long-form extraction can break without warning. Treat scraped data as best-effort and verify important exports manually.
+This project automates the X web UI through Selenium. X changes its DOM, labels, login flows, and timeline behavior frequently, so selectors and long-form extraction can break without warning. Treat scraped data as best-effort and verify important exports manually.
 
 This project does not bypass access controls, does not include credentials, and should only be used for educational or personal archiving workflows that you are authorized to perform.
 
@@ -44,9 +44,9 @@ The CLI prompts for:
 3. Count, date range, or last-N-days mode
 4. JSON, Markdown, or DOCX export
 
-Exports are written under `output/<target>/` by default.
+Exports are written under `output/<target>/` by default. Each scrape also writes a run log under `output/<target>/logs/`.
 
-### Selector Diagnostics
+## Selector Diagnostics
 
 Run selector diagnostics without starting a scrape:
 
@@ -58,18 +58,9 @@ The CLI opens Chrome, lets you navigate or log in, then checks the currently loa
 
 Diagnostics only reports what is detectable on the current page. It does not guarantee a full scrape will succeed, and it does not bypass login, rate limits, private content, or platform restrictions.
 
-## Desktop Usage
-
-```bash
-npm install
-npm run tauri dev
-```
-
-The desktop app uses `python_sidecar/` for scraping and streams structured events to the React UI.
-
 ## Run Logs
 
-Every CLI scrape and sidecar scrape writes a JSON run log under:
+Every CLI scrape writes a JSON run log under:
 
 ```text
 output/<target>/logs/
@@ -119,34 +110,26 @@ JSON exports use a stable top-level shape:
 }
 ```
 
-`url` is kept for compatibility; `tweet_url` is the explicit canonical field used by the app.
+`url` is kept for compatibility; `tweet_url` is the explicit canonical field used by current exports.
 
 ## Validation
 
-Run the local validation suite without opening a browser:
+Run the browser-free validation suite:
 
 ```bash
 python -m unittest discover -s tests
-python -m compileall main.py scraper.py document_generator.py export_schema.py diagnostics.py python_sidecar
-```
-
-For the desktop frontend:
-
-```bash
-npm run build
+python -m compileall main.py scraper.py document_generator.py export_schema.py diagnostics.py config.py
 ```
 
 ## Project Structure
 
 ```text
 main.py                 Interactive Python CLI
-scraper.py              CLI Selenium scraper
+scraper.py              Selenium scraper
+config.py               Selector definitions and runtime constants
 document_generator.py   JSON/Markdown/DOCX export writers
-export_schema.py        Shared export schema and safe write helpers
+export_schema.py        Export schema and safe write helpers
 diagnostics.py          Selector diagnostics and structured run logs
-python_sidecar/         JSON-line scraper service used by Tauri
-src/                    React frontend
-src-tauri/              Tauri/Rust backend
 tests/                  Browser-free validation tests
 ```
 

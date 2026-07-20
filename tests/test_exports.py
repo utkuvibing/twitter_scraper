@@ -77,6 +77,17 @@ class ExportSchemaTests(unittest.TestCase):
         self.assertEqual(payload["total_tweets"], 1)
         self.assertEqual(payload["tweets"][0]["id"], "123")
 
+    def test_build_export_payload_preserves_bookmark_scrape_type(self):
+        payload = build_export_payload(
+            [DummyTweet()],
+            "bookmarks",
+            scrape_type="bookmarks",
+            exported_at=datetime(2026, 5, 12, 10, 30, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(payload["scrape_type"], "bookmarks")
+        self.assertEqual(payload["target"], "bookmarks")
+
 
 class DocumentExportTests(unittest.TestCase):
     def test_json_markdown_and_docx_exports_write_files(self):
@@ -102,6 +113,23 @@ class DocumentExportTests(unittest.TestCase):
 
             self.assertIn(f"**Schema:** {EXPORT_SCHEMA_VERSION}", markdown)
             self.assertIn("Hello from a scraped tweet", markdown)
+
+    def test_json_export_preserves_bookmark_scrape_type(self):
+        tweets = [DummyTweet()]
+        with tempfile.TemporaryDirectory() as tmp:
+            json_path = create_json_document(
+                tweets,
+                "bookmarks.json",
+                "bookmarks",
+                output_dir=tmp,
+                scrape_type="bookmarks",
+            )
+
+            with open(json_path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+
+            self.assertEqual(payload["scrape_type"], "bookmarks")
+            self.assertEqual(payload["target"], "bookmarks")
 
 
 if __name__ == "__main__":

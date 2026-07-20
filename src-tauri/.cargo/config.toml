@@ -1,3 +1,0 @@
-[build]
-target-dir = "C:\\cargo-target\\twitter-scraper"
-target = "x86_64-pc-windows-msvc"

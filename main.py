@@ -446,7 +446,10 @@ def main():
                 if output_format == "json":
                     print("JSON dosyası oluşturuluyor...")
                     output_path = create_json_document(
-                        tweets, config["output_file"], config["target_username"]
+                        tweets,
+                        config["output_file"],
+                        config["target_username"],
+                        scrape_type=scrape_type,
                     )
                 elif output_format == "md":
                     print("Markdown dosyası oluşturuluyor...")
@@ -461,7 +464,24 @@ def main():
 
                 print()
                 print("=" * 60)
-                print("TAMAMLANDI!")
+                partial_count = (
+                    mode.get("mode") == "count"
+                    and len(tweets) < mode.get("count", len(tweets))
+                )
+                if partial_count:
+                    print("KISMİ TAMAMLANDI!")
+                    print(f"İstenen: {mode['count']} tweet, toplanan: {len(tweets)} tweet.")
+                    print("Timeline daha fazla yeni tweet yüklemedi; run log detaylarına bakın.")
+                    record_event(
+                        run_log,
+                        "timeline_loading",
+                        "warning",
+                        "Count scrape ended before requested tweet count",
+                        collected=len(tweets),
+                        target=mode["count"],
+                    )
+                else:
+                    print("TAMAMLANDI!")
                 print(f"Toplam {len(tweets)} tweet toplandı.")
                 print(f"Dosya: {output_path}")
                 print("=" * 60)
@@ -474,7 +494,7 @@ def main():
                     format=output_format,
                     total_tweets=len(tweets),
                 )
-                save_cli_run_log(run_log, "completed")
+                save_cli_run_log(run_log, "partial" if partial_count else "completed")
 
             # Devam etmek istiyor mu?
             if ask_continue():
@@ -515,7 +535,12 @@ def main():
 
                 if output_format == "json":
                     output_file = f"{base_name}_PARTIAL.json"
-                    output_path = create_json_document(tweets, output_file, config["target_username"])
+                    output_path = create_json_document(
+                        tweets,
+                        output_file,
+                        config["target_username"],
+                        scrape_type=config.get("scrape_type", "profile"),
+                    )
                 elif output_format == "md":
                     output_file = f"{base_name}_PARTIAL.md"
                     output_path = create_markdown_document(tweets, output_file, config["target_username"])
@@ -557,6 +582,16 @@ def main():
         import traceback
         traceback.print_exc()
 
+        if scraper and hasattr(scraper, 'tweets_collected') and scraper.tweets_collected and not tweets:
+            tweets = scraper.tweets_collected
+
+        error_text = str(e).lower()
+        error_reason = (
+            "browser_window_closed"
+            if "no such window" in error_text or "web view not found" in error_text
+            else "unknown_error"
+        )
+
         # Hata durumunda da kaydetmeyi dene
         if tweets and config:
             print(f"\nHataya rağmen {len(tweets)} tweet kaydediliyor...")
@@ -565,7 +600,12 @@ def main():
             try:
                 if output_format == "json":
                     output_file = f"{base_name}_ERROR.json"
-                    output_path = create_json_document(tweets, output_file, config["target_username"])
+                    output_path = create_json_document(
+                        tweets,
+                        output_file,
+                        config["target_username"],
+                        scrape_type=config.get("scrape_type", "profile"),
+                    )
                 elif output_format == "md":
                     output_file = f"{base_name}_ERROR.md"
                     output_path = create_markdown_document(tweets, output_file, config["target_username"])
@@ -579,10 +619,11 @@ def main():
                         "export_saving",
                         "warning",
                         "Error export saved after exception",
+                        reason=error_reason,
                         path=output_path,
                         total_tweets=len(tweets),
                     )
-                    save_cli_run_log(run_log, "failed")
+                    save_cli_run_log(run_log, "partial")
             except:
                 if run_log:
                     record_event(
@@ -600,7 +641,7 @@ def main():
                 "unknown_error",
                 "error",
                 f"Unhandled exception: {e}",
-                reason="unknown_error",
+                reason=error_reason,
             )
             save_cli_run_log(run_log, "failed")
 
