@@ -21,6 +21,23 @@ class ChromeAuthTests(unittest.TestCase):
         self.assertIn(f"--user-data-dir={profile}", command)
         self.assertIn("https://x.com/i/flow/login", command)
 
+    def test_manual_login_refuses_google_oauth_in_a_webdriver_window(self):
+        from scraper import XScraper
+
+        scraper = XScraper(browser_profile=".sessions/x-scraper")
+        scraper.driver = UnauthenticatedDriver()
+        with patch("builtins.input", return_value="") as login_input:
+            self.assertFalse(scraper.manual_login())
+
+        login_input.assert_not_called()
+
+
+class UnauthenticatedDriver:
+    current_url = "https://x.com/i/flow/login"
+
+    def get(self, _url):
+        pass
+
 
 if __name__ == "__main__":
     unittest.main()

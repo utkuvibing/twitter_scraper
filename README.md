@@ -26,43 +26,49 @@ To run directly from a source checkout, use `python main.py` instead of `x-scrap
 
 ## Quick start
 
-Run without arguments for the interactive Turkish-language wizard. It defaults to manual browser login and guides you through the source, scope, and export format.
+Run without arguments for the English interactive wizard. It guides you through the source, collection range, and export format.
 
 ```bash
 x-scraper
 ```
 
-For repeatable scripts, use the non-interactive command. It always opens Chrome for manual login unless you explicitly supply a previously authorized browser profile.
+For Google or Apple X accounts, prepare the session once in normal Chrome. This Chrome window is not controlled by Selenium, so complete your login there and close it when finished.
+
+```bash
+x-scraper login
+```
+
+For repeatable scripts, use the non-interactive command with that saved browser profile.
 
 ```bash
 # Archive 50 public posts as JSON.
-x-scraper scrape --profile example --count 50 --format json
+x-scraper scrape --profile example --count 50 --format json --browser-profile .sessions/x-scraper
 
 # Archive posts from the last 7 days as CSV in a chosen output directory.
-x-scraper scrape --profile example --days 7 --format csv --output-dir exports
+x-scraper scrape --profile example --days 7 --format csv --output-dir exports --browser-profile .sessions/x-scraper
 
 # Archive a date range as Markdown.
-x-scraper scrape --profile example --from 2026-07-01 --to 2026-07-20 --format md
+x-scraper scrape --profile example --from 2026-07-01 --to 2026-07-20 --format md --browser-profile .sessions/x-scraper
 
 # Archive the current account's bookmarks.
-x-scraper scrape --bookmarks --count 100 --format docx
+x-scraper scrape --bookmarks --count 100 --format docx --browser-profile .sessions/x-scraper
 ```
 
 Exactly one source (`--profile` or `--bookmarks`) and one collection mode (`--count`, `--days`, or `--from` plus `--to`) are required. Handles, dates, limits, output formats, and diagnostics URLs are checked before Chrome starts.
 
 ## Reusing an authorized Chrome profile
 
-Use `--browser-profile` only for a local Chrome profile directory you control. First run it with a visible browser, sign in yourself, then reuse it for a future run. The profile may contain account session data: keep it private and never commit or share it.
+Use `--browser-profile` only for a local Chrome profile directory you control. Create it with `x-scraper login`, which opens normal Chrome and lets you sign in yourself. The profile may contain account session data: keep it private and never commit or share it.
 
 ```bash
-# First run: Chrome opens and you sign in yourself.
-x-scraper scrape --profile example --count 10 --browser-profile .sessions/x-scraper
+# First run: normal Chrome opens; sign in to X and close Chrome when finished.
+x-scraper login --browser-profile .sessions/x-scraper
 
-# Later: use the same authorized profile without opening a window.
+# Later: reuse the same authorized profile without opening a window.
 x-scraper scrape --profile example --count 10 --headless --browser-profile .sessions/x-scraper
 ```
 
-Headless mode rejects a missing profile directory to avoid launching a new unauthenticated session. The CLI does not accept passwords as arguments and does not write credentials to exports or run logs.
+Google and Apple sign-in are intentionally not available in the Selenium window. Headless mode rejects a missing profile directory to avoid launching a new unauthenticated session. The CLI does not accept passwords as arguments and does not write credentials to exports or run logs.
 
 ## Exports and run logs
 

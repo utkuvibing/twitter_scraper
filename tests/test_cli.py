@@ -6,7 +6,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from main import get_user_input, main, run_diagnostics_cli
+from main import get_user_input, main, run_diagnostics_cli, run_interactive
 from scraper import Tweet, XScraper
 from x_scraper_cli import (
     CliValidationError,
@@ -208,6 +208,39 @@ class CliRequestTests(unittest.TestCase):
 
         self.assertEqual(config["output_format"], "csv")
         self.assertTrue(config["output_file"].endswith(".csv"))
+        self.assertEqual(
+            config["browser_profile"],
+            str((Path.cwd() / ".sessions" / "x-scraper").resolve()),
+        )
+        self.assertTrue(config["prepare_browser_profile"])
+
+    @patch(
+        "builtins.input",
+        side_effect=["1", "1", "example", "1", "1", "4", ""],
+    )
+    def test_interactive_wizard_prepares_and_reuses_the_browser_profile(self, _input):
+        tweet = Tweet(
+            id="1",
+            text="archived post",
+            date=datetime(2026, 7, 20),
+            date_str="July 20, 2026",
+            media_urls=[],
+            tweet_url="https://x.com/example/status/1",
+        )
+        scraper = FakeScraper([tweet])
+        expected_profile = str((Path.cwd() / ".sessions" / "x-scraper").resolve())
+
+        with (
+            patch("main.open_chrome_for_x_login", create=True, return_value=0) as open_chrome,
+            patch("main.XScraper", return_value=scraper) as scraper_class,
+            patch("main.create_csv_document", return_value="output/example/example_tweets.csv"),
+            patch("main.save_cli_run_log"),
+            patch("main.ask_continue", return_value=False),
+        ):
+            self.assertEqual(run_interactive(), 0)
+
+        open_chrome.assert_called_once_with(expected_profile)
+        self.assertEqual(scraper_class.call_args.kwargs["browser_profile"], expected_profile)
 
     def test_cli_scrape_forwards_profile_and_exports_collected_tweets(self):
         profile = Path("test-profile").resolve()

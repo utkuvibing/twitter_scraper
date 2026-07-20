@@ -134,7 +134,7 @@ class XScraper:
             Başarılı ise True
         """
         try:
-            print("X'e giriş yapılıyor...")
+            print("Signing in to X...")
             record_event(self.run_log, "login", "info", "Automatic login started")
             self.driver.get(X_LOGIN_URL)
 
@@ -163,8 +163,8 @@ class XScraper:
                 verification_input = WebDriverWait(self.driver, 3).until(
                     EC.presence_of_element_located((By.XPATH, '//input[@data-testid="ocfEnterTextTextInput"]'))
                 )
-                print("Ek doğrulama gerekiyor. Lütfen telefon veya email girin:")
-                verification_code = input("Doğrulama kodu/bilgisi: ")
+                print("Additional verification is required. Enter your phone or email:")
+                verification_code = input("Verification code or information: ")
                 verification_input.clear()
                 self._human_type(verification_input, verification_code)
                 verification_input.send_keys(Keys.RETURN)
@@ -191,11 +191,11 @@ class XScraper:
                     lambda d: "home" in d.current_url.lower() or
                               ("x.com" in d.current_url and "login" not in d.current_url and "flow" not in d.current_url)
                 )
-                print("Giriş başarılı!")
+                print("Sign-in completed.")
                 record_event(self.run_log, "login", "info", "Automatic login completed")
                 return True
             except TimeoutException:
-                print("Giriş kontrol ediliyor...")
+                print("Checking sign-in status...")
                 record_event(
                     self.run_log,
                     "login",
@@ -205,7 +205,7 @@ class XScraper:
                 return True  # Devam etmeyi dene
 
         except Exception as e:
-            print(f"Giriş hatası: {e}")
+            print(f"Sign-in error: {e}")
             record_event(
                 self.run_log,
                 "login",
@@ -215,7 +215,7 @@ class XScraper:
             )
             return False
 
-    def manual_login(self) -> bool:
+    def _legacy_manual_login(self) -> bool:
         """
         Manuel giriş - Kullanıcı kendisi giriş yapar (Google, Apple vs. için)
 
@@ -266,6 +266,46 @@ class XScraper:
             )
             return False
 
+    def manual_login(self) -> bool:
+        """Confirm an X session without driving a third-party OAuth screen."""
+        try:
+            record_event(self.run_log, "manual_login", "info", "Checking saved X session")
+            print("[INFO] Checking the saved X session...")
+            self.driver.get(X_LOGIN_URL)
+            current_url = self.driver.current_url.lower()
+            is_authenticated = (
+                "x.com" in current_url
+                and "login" not in current_url
+                and "flow" not in current_url
+            )
+            if is_authenticated:
+                print("[OK] Saved X session is ready.")
+                record_event(self.run_log, "manual_login", "info", "Saved X session confirmed")
+                return True
+
+            print(
+                "[ERROR] No X session was found. Run x-scraper login to sign in using "
+                "normal Chrome; Google and Apple sign-in are not available in this window."
+            )
+            record_event(
+                self.run_log,
+                "manual_login",
+                "error",
+                "Saved X session was not authenticated",
+                reason="manual_login_session_missing",
+            )
+            return False
+        except Exception as exc:
+            print(f"[ERROR] Saved-session check failed: {exc}")
+            record_event(
+                self.run_log,
+                "manual_login",
+                "error",
+                f"Saved-session check failed: {exc}",
+                reason="manual_login_timeout",
+            )
+            return False
+
     def _human_type(self, element, text: str):
         """Hızlı ama insan benzeri yazma"""
         for char in text:
@@ -284,7 +324,7 @@ class XScraper:
         """
         try:
             url = X_PROFILE_URL.format(username=target_username)
-            print(f"Profile gidiliyor: {url}")
+            print(f"Opening profile: {url}")
             record_event(
                 self.run_log,
                 "profile_navigation",
@@ -299,7 +339,7 @@ class XScraper:
             wait.until(
                 EC.presence_of_element_located((By.XPATH, '//article[@data-testid="tweet"]'))
             )
-            print("Profil yüklendi!")
+            print("Profile loaded.")
             diagnostics = self.run_selector_diagnostics()
             record_event(
                 self.run_log,
@@ -311,7 +351,7 @@ class XScraper:
             return True
 
         except TimeoutException:
-            print("Profil yüklenemedi veya tweet bulunamadı.")
+            print("Profile did not load or no posts were found.")
             record_event(
                 self.run_log,
                 "profile_navigation",
@@ -322,7 +362,7 @@ class XScraper:
             )
             return False
         except Exception as e:
-            print(f"Profil navigasyon hatası: {e}")
+            print(f"Profile navigation error: {e}")
             record_event(
                 self.run_log,
                 "profile_navigation",
@@ -340,7 +380,7 @@ class XScraper:
             Başarılı ise True
         """
         try:
-            print(f"Bookmarks sayfasına gidiliyor: {X_BOOKMARKS_URL}")
+            print(f"Opening bookmarks: {X_BOOKMARKS_URL}")
             record_event(
                 self.run_log,
                 "bookmarks_navigation",
@@ -355,7 +395,7 @@ class XScraper:
             wait.until(
                 EC.presence_of_element_located((By.XPATH, '//article[@data-testid="tweet"]'))
             )
-            print("Bookmarks sayfası yüklendi!")
+            print("Bookmarks loaded.")
             diagnostics = self.run_selector_diagnostics()
             record_event(
                 self.run_log,
@@ -367,7 +407,7 @@ class XScraper:
             return True
 
         except TimeoutException:
-            print("Bookmarks yüklenemedi veya bookmark bulunamadı.")
+            print("Bookmarks did not load or no bookmarks were found.")
             record_event(
                 self.run_log,
                 "bookmarks_navigation",
@@ -378,7 +418,7 @@ class XScraper:
             )
             return False
         except Exception as e:
-            print(f"Bookmarks navigasyon hatası: {e}")
+            print(f"Bookmarks navigation error: {e}")
             record_event(
                 self.run_log,
                 "bookmarks_navigation",
@@ -480,7 +520,7 @@ class XScraper:
             has_article = self._tweet_has_article_attachment(article)
 
             if has_article:
-                print(f"      [ARTICLE] Article tespit edildi")
+                print("      [ARTICLE] Article detected")
 
             # Promo/tanıtım tweetlerini atla
             if text:
@@ -507,7 +547,7 @@ class XScraper:
                     date = datetime.fromisoformat(datetime_attr.replace("Z", "+00:00"))
             except:
                 date = datetime.now()
-                date_str = "Tarih alınamadı"
+                date_str = "Date unavailable"
 
             # Medya URL'lerini al
             media_urls = []
@@ -526,7 +566,7 @@ class XScraper:
                     By.XPATH, './/*[@data-testid="videoPlayer"]'
                 )
                 if videos:
-                    media_urls.append("[Video içeriği]")
+                    media_urls.append("[Video content]")
 
                 # GIF
                 gifs = article.find_elements(
@@ -660,7 +700,7 @@ class XScraper:
                     pass
 
         except Exception as e:
-            print(f"    [!] Hata: {str(e)[:30]}")
+            print(f"    [!] Error: {str(e)[:30]}")
             record_event(
                 self.run_log,
                 "full_text_extraction",
@@ -751,7 +791,7 @@ class XScraper:
                         content_parts.append(line)
 
             result = "\n\n".join(content_parts)
-            print(f"    ✓ Article: {len(result)} karakter")
+            print(f"    [OK] Article: {len(result)} characters")
             if not result:
                 record_event(
                     self.run_log,
@@ -764,7 +804,7 @@ class XScraper:
             return result
 
         except Exception as e:
-            print(f"    [!] Article hata: {str(e)[:50]}")
+            print(f"    [!] Article error: {str(e)[:50]}")
             record_event(
                 self.run_log,
                 "article_extraction",
@@ -996,8 +1036,8 @@ class XScraper:
         Returns:
             Tweet listesi
         """
-        print(f"{count} tweet toplanıyor...")
-        print("(İptal etmek için Ctrl+C - toplananlar kaydedilecek)\n")
+        print(f"Collecting {count} posts...")
+        print("(Press Ctrl+C to stop; collected posts will be saved)\n")
         self.tweets_collected = []  # Instance variable olarak sakla
         no_progress_count = 0
         no_new_collected_count = 0
@@ -1030,7 +1070,7 @@ class XScraper:
                     self.tweets_collected.append(tweet)
                     article_tag = " [ARTICLE]" if tweet.has_article else ""
                     show_more_tag = " [SHOW MORE]" if tweet.needs_full_text else ""
-                    print(f"  [{len(self.tweets_collected)}/{count}] Tweet toplandı: {tweet.date_str}{article_tag}{show_more_tag}")
+                    print(f"  [{len(self.tweets_collected)}/{count}] Post collected: {tweet.date_str}{article_tag}{show_more_tag}")
 
                 collected_after = len(self.tweets_collected)
                 if collected_after >= count:
@@ -1053,7 +1093,7 @@ class XScraper:
                     and recovery_attempts < max_recovery_attempts
                 ):
                     recovery_attempts += 1
-                    print(f"Timeline takıldı gibi görünüyor, scroll recovery deneniyor ({recovery_attempts}/{max_recovery_attempts})...")
+                    print(f"Timeline appears stalled; attempting scroll recovery ({recovery_attempts}/{max_recovery_attempts})...")
                     record_event(
                         self.run_log,
                         "timeline_loading",
@@ -1069,7 +1109,7 @@ class XScraper:
                     self._scroll_recovery()
 
                 if no_new_collected_count >= max_no_new_collected:
-                    print(f"{max_no_new_collected} tarama turunda yeni tweet parse edilemedi. Kısmi sonuçla duruluyor.")
+                    print(f"No new posts were parsed after {max_no_new_collected} passes. Stopping with partial results.")
                     record_event(
                         self.run_log,
                         "timeline_loading",
@@ -1085,7 +1125,7 @@ class XScraper:
                     break
 
                 if no_progress_count >= max_no_progress:
-                    print(f"Timeline {max_no_progress} denemede ilerlemedi. Kısmi sonuçla duruluyor.")
+                    print(f"Timeline did not advance after {max_no_progress} attempts. Stopping with partial results.")
                     record_event(
                         self.run_log,
                         "timeline_loading",
@@ -1102,7 +1142,7 @@ class XScraper:
                     break
 
                 if scan_cycles >= max_scan_cycles:
-                    print("Maksimum timeline tarama denemesine ulaşıldı. Kısmi sonuçla duruluyor.")
+                    print("Maximum timeline scan attempts reached. Stopping with partial results.")
                     record_event(
                         self.run_log,
                         "timeline_loading",
@@ -1116,11 +1156,11 @@ class XScraper:
                     break
 
         except KeyboardInterrupt:
-            print(f"\n\nDurduruldu! {len(self.tweets_collected)} tweet toplandı.")
+            print(f"\n\nStopped. {len(self.tweets_collected)} posts were collected.")
             raise  # Ana programa ilet
         except NoSuchWindowException as e:
             browser_lost = True
-            print(f"\nBrowser penceresi kapandı veya Chrome bağlantısı koptu. {len(self.tweets_collected)} tweet kısmi sonuç olarak kullanılacak.")
+            print(f"\nBrowser window closed or Chrome disconnected. {len(self.tweets_collected)} posts will be used as partial results.")
             record_event(
                 self.run_log,
                 "browser",
@@ -1135,7 +1175,7 @@ class XScraper:
             if "no such window" not in str(e).lower() and "web view not found" not in str(e).lower():
                 raise
             browser_lost = True
-            print(f"\nChrome webview kayboldu. {len(self.tweets_collected)} tweet kısmi sonuç olarak kullanılacak.")
+            print(f"\nChrome web view disappeared. {len(self.tweets_collected)} posts will be used as partial results.")
             record_event(
                 self.run_log,
                 "browser",
@@ -1149,11 +1189,11 @@ class XScraper:
 
         # Scroll bitti, şimdi show more olan tweetlerin tam metnini al
         if browser_lost:
-            print("Browser kapandığı için show more/article tam metin alma adımı atlandı.")
+            print("Full text extraction was skipped because the browser closed.")
         else:
             self._process_show_more_tweets()
 
-        print(f"Toplam {len(self.tweets_collected)} tweet toplandı.")
+        print(f"Collected {len(self.tweets_collected)} posts in total.")
         if not self.tweets_collected:
             record_event(
                 self.run_log,
@@ -1180,38 +1220,38 @@ class XScraper:
         if total == 0:
             return
 
-        print(f"\n{total} uzun içerik alınıyor ({len(show_more_tweets)} show more, {len(article_tweets)} article)...")
+        print(f"\nRetrieving {total} long-form items ({len(show_more_tweets)} show more, {len(article_tweets)} articles)...")
         current = 0
 
         for tweet in show_more_tweets:
             current += 1
             try:
-                print(f"  [{current}/{total}] Show more - tam metin alınıyor...")
+                print(f"  [{current}/{total}] Retrieving full text from show more...")
                 full_text = self._get_full_tweet_text(tweet.tweet_url)
                 if full_text:
                     tweet.text = full_text
                     tweet.needs_full_text = False
             except Exception as e:
-                print(f"    [!] Hata: {str(e)[:30]}")
+                print(f"    [!] Error: {str(e)[:30]}")
 
         for tweet in article_tweets:
             current += 1
             try:
-                print(f"  [{current}/{total}] Article içeriği alınıyor...")
+                print(f"  [{current}/{total}] Retrieving article content...")
                 article_content = self._get_article_content(tweet.tweet_url)
                 if article_content:
                     if tweet.text:
-                        tweet.text = tweet.text + "\n\n--- ARTICLE İÇERİĞİ ---\n\n" + article_content
+                        tweet.text = tweet.text + "\n\n--- ARTICLE CONTENT ---\n\n" + article_content
                     else:
                         tweet.text = article_content
                     tweet.has_article = False
-                    print(f"    ✓ {len(article_content)} karakter alındı")
+                    print(f"    [OK] Retrieved {len(article_content)} characters")
                 else:
-                    print(f"    ✗ Article içeriği alınamadı")
+                    print("    [WARN] Article content could not be retrieved")
             except Exception as e:
-                print(f"    [!] Hata: {str(e)[:50]}")
+                print(f"    [!] Error: {str(e)[:50]}")
 
-        print("Tam içerikler alındı.\n")
+        print("Full content retrieval completed.\n")
 
     def scrape_by_date(
         self, start_date: datetime, end_date: Optional[datetime] = None
@@ -1229,8 +1269,8 @@ class XScraper:
         if end_date is None:
             end_date = datetime.now(start_date.tzinfo) if start_date.tzinfo else datetime.now()
 
-        print(f"Tarih aralığı: {start_date.strftime('%Y-%m-%d')} - {end_date.strftime('%Y-%m-%d')}")
-        print("(İptal etmek için Ctrl+C - toplananlar kaydedilecek)\n")
+        print(f"Date range: {start_date.strftime('%Y-%m-%d')} - {end_date.strftime('%Y-%m-%d')}")
+        print("(Press Ctrl+C to stop; collected posts will be saved)\n")
         self.tweets_collected = []
         no_progress_count = 0
         max_no_progress = 8
@@ -1262,7 +1302,7 @@ class XScraper:
                         if start_date_naive <= tweet_date <= end_date_naive:
                             self.tweets_collected.append(tweet)
                             new_tweets_found = True
-                            print(f"  [{len(self.tweets_collected)}] Tweet: {tweet.date_str}")
+                            print(f"  [{len(self.tweets_collected)}] Post: {tweet.date_str}")
 
                 if reached_start_date:
                     break
@@ -1275,7 +1315,7 @@ class XScraper:
                     no_progress_count += 1
 
                 if no_progress_count in (2, 4, 6):
-                    print("Timeline takıldı gibi görünüyor, scroll recovery deneniyor...")
+                    print("Timeline appears stalled; attempting scroll recovery...")
                     record_event(
                         self.run_log,
                         "timeline_loading",
@@ -1288,7 +1328,7 @@ class XScraper:
                     self._scroll_recovery()
 
                 if no_progress_count >= max_no_progress:
-                    print("Daha fazla tweet bulunamadı veya timeline ilerlemiyor.")
+                    print("No more posts were found or the timeline is not advancing.")
                     record_event(
                         self.run_log,
                         "timeline_loading",
@@ -1302,7 +1342,7 @@ class XScraper:
                     break
 
                 if scan_cycles >= max_scan_cycles:
-                    print("Maksimum timeline tarama denemesine ulaşıldı. Kısmi sonuçla duruluyor.")
+                    print("Maximum timeline scan attempts reached. Stopping with partial results.")
                     record_event(
                         self.run_log,
                         "timeline_loading",
@@ -1315,13 +1355,13 @@ class XScraper:
                     break
 
         except KeyboardInterrupt:
-            print(f"\n\nDurduruldu! {len(self.tweets_collected)} tweet toplandı.")
+            print(f"\n\nStopped. {len(self.tweets_collected)} posts were collected.")
             raise
 
         # Scroll bitti, şimdi show more olan tweetlerin tam metnini al
         self._process_show_more_tweets()
 
-        print(f"Toplam {len(self.tweets_collected)} tweet toplandı.")
+        print(f"Collected {len(self.tweets_collected)} posts in total.")
         if not self.tweets_collected:
             record_event(
                 self.run_log,
@@ -1358,10 +1398,10 @@ class XScraper:
             Tweet listesi
         """
         if get_all:
-            print("Tüm bookmark'lar toplanıyor...")
+            print("Collecting all bookmarks...")
         else:
-            print(f"{count} bookmark toplanıyor...")
-        print("(İptal etmek için Ctrl+C - toplananlar kaydedilecek)\n")
+            print(f"Collecting {count} bookmarks...")
+        print("(Press Ctrl+C to stop; collected posts will be saved)\n")
 
         self.tweets_collected = []
         no_progress_count = 0
@@ -1393,9 +1433,9 @@ class XScraper:
                     article_tag = " [ARTICLE]" if tweet.has_article else ""
                     show_more_tag = " [SHOW MORE]" if tweet.needs_full_text else ""
                     if count:
-                        print(f"  [{len(self.tweets_collected)}/{count}] Bookmark toplandı: {tweet.date_str}{article_tag}{show_more_tag}")
+                        print(f"  [{len(self.tweets_collected)}/{count}] Bookmark collected: {tweet.date_str}{article_tag}{show_more_tag}")
                     else:
-                        print(f"  [{len(self.tweets_collected)}] Bookmark toplandı: {tweet.date_str}{article_tag}{show_more_tag}")
+                        print(f"  [{len(self.tweets_collected)}] Bookmark collected: {tweet.date_str}{article_tag}{show_more_tag}")
 
                 if not get_all and count and len(self.tweets_collected) >= count:
                     break
@@ -1408,7 +1448,7 @@ class XScraper:
                     no_progress_count += 1
 
                 if no_progress_count in (2, 4, 6):
-                    print("Timeline takıldı gibi görünüyor, scroll recovery deneniyor...")
+                    print("Timeline appears stalled; attempting scroll recovery...")
                     record_event(
                         self.run_log,
                         "timeline_loading",
@@ -1422,7 +1462,7 @@ class XScraper:
                     self._scroll_recovery()
 
                 if no_progress_count >= max_no_progress:
-                    print("Daha fazla bookmark bulunamadı veya timeline ilerlemiyor.")
+                    print("No more bookmarks were found or the timeline is not advancing.")
                     record_event(
                         self.run_log,
                         "timeline_loading",
@@ -1437,7 +1477,7 @@ class XScraper:
                     break
 
                 if scan_cycles >= max_scan_cycles:
-                    print("Maksimum bookmark tarama denemesine ulaşıldı. Kısmi sonuçla duruluyor.")
+                    print("Maximum bookmark scan attempts reached. Stopping with partial results.")
                     record_event(
                         self.run_log,
                         "timeline_loading",
@@ -1451,13 +1491,13 @@ class XScraper:
                     break
 
         except KeyboardInterrupt:
-            print(f"\n\nDurduruldu! {len(self.tweets_collected)} bookmark toplandı.")
+            print(f"\n\nStopped. {len(self.tweets_collected)} bookmarks were collected.")
             raise  # Ana programa ilet
 
         # Scroll bitti, şimdi show more olan tweetlerin tam metnini al
         self._process_show_more_tweets()
 
-        print(f"Toplam {len(self.tweets_collected)} bookmark toplandı.")
+        print(f"Collected {len(self.tweets_collected)} bookmarks in total.")
         if not self.tweets_collected:
             record_event(
                 self.run_log,

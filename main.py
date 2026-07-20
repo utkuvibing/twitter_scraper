@@ -7,7 +7,9 @@ import sys
 import getpass
 from datetime import datetime, timedelta
 
+from chrome_auth import default_browser_profile, open_chrome_for_x_login
 from scraper import XScraper
+from terminal_ui import TerminalUI
 from document_generator import (
     BASE_OUTPUT_DIR,
     create_csv_document,
@@ -22,7 +24,7 @@ def save_cli_run_log(run_log: ScrapeRunLog, status: str = "completed") -> str:
     """Persist the CLI run log and print the path for the user."""
     run_log.mark_completed(status)
     path = save_run_log(run_log, BASE_OUTPUT_DIR)
-    print(f"Run log kaydedildi: {path}")
+    print(f"Run log saved: {path}")
     if run_log.failure_reason:
         print(f"Failure reason: {run_log.failure_reason}")
     return path
@@ -36,9 +38,9 @@ def run_diagnostics_cli(url: str | None = None) -> int:
         print("=" * 60)
         print("   X Selector Diagnostics")
         print("=" * 60)
-        print("Browser açılacak ve seçilen sayfadaki temel X selector'ları kontrol edilecek.")
+        print("A browser will open and check core X selectors on the selected page.")
         if url is None:
-            url = input("Kontrol edilecek URL (boş: https://x.com/home): ").strip() or "https://x.com/home"
+            url = input("URL to inspect (blank for https://x.com/home): ").strip() or "https://x.com/home"
 
         from x_scraper_cli import CliValidationError, validate_diagnostics_url
 
@@ -59,7 +61,7 @@ def run_diagnostics_cli(url: str | None = None) -> int:
         scraper = XScraper(headless=False, run_log=run_log)
         scraper.start()
         scraper.driver.get(url)
-        input("Sayfa yüklendikten/giriş tamamlandıktan sonra ENTER'a basın...")
+        input("Press ENTER after the page has loaded or sign-in is complete...")
         diagnostics = scraper.run_selector_diagnostics()
 
         print("\nSelector diagnostics:")
@@ -88,14 +90,14 @@ def run_diagnostics_cli(url: str | None = None) -> int:
             reason="unknown_error",
         )
         save_cli_run_log(run_log, "failed")
-        print(f"Diagnostics hatası: {e}")
+        print(f"Diagnostics error: {e}")
         return 1
     finally:
         if scraper:
             scraper.stop()
 
 
-def get_user_input():
+def _legacy_get_user_input():
     """Kullanıcıdan gerekli bilgileri al"""
     print("=" * 60)
     print("   X (Twitter) Tweet Scraper")
@@ -223,7 +225,93 @@ def get_user_input():
     }
 
 
-def get_scrape_config():
+def get_user_input():
+    """Collect the initial interactive scrape configuration in English."""
+    ui = TerminalUI()
+    ui.banner()
+    ui.section("Account session", 1)
+    ui.choice(1, "Sign in with Google or Apple in normal Chrome", "recommended")
+    ui.choice(2, "Sign in with an X username and password")
+    login_method = input("Select (1/2): ").strip()
+
+    x_username = ""
+    x_password = ""
+    manual_login = False
+    browser_profile = None
+    prepare_browser_profile = False
+    if login_method == "2":
+        ui.section("X account credentials")
+        x_username = input("X username or email: ").strip()
+        x_password = getpass.getpass("X password: ")
+    else:
+        manual_login = True
+        browser_profile = default_browser_profile()
+        prepare_browser_profile = True
+        ui.status("info", "A normal Chrome window will open so you can sign in safely.")
+
+    ui.section("Source", 2)
+    ui.choice(1, "Profile posts", "archive posts from a public account")
+    ui.choice(2, "Bookmarks", "archive bookmarks from your own account")
+    scrape_type_choice = input("Select (1/2): ").strip()
+    if scrape_type_choice == "2":
+        scrape_type = "bookmarks"
+        target_username = "bookmarks"
+    else:
+        scrape_type = "profile"
+        ui.section("Target profile", 3)
+        target_username = input("Handle (without @): ").strip().lstrip("@")
+
+    ui.section("Collection range", 4)
+    ui.choice(1, "Post count")
+    ui.choice(2, "Last N days")
+    ui.choice(3, "Date range")
+    mode = input("Select (1/2/3): ").strip()
+    if mode == "1":
+        mode_config = {"mode": "count", "count": int(input("Posts to collect: ").strip())}
+    elif mode == "2":
+        mode_config = {"mode": "days", "days": int(input("Days to collect: ").strip())}
+    elif mode == "3":
+        print("Date format: DD.MM.YYYY (for example 01.01.2024)")
+        start_date = datetime.strptime(input("Start date: ").strip(), "%d.%m.%Y")
+        end_date = datetime.strptime(input("End date: ").strip(), "%d.%m.%Y")
+        mode_config = {
+            "mode": "date_range",
+            "start": start_date,
+            "end": end_date.replace(hour=23, minute=59, second=59),
+        }
+    else:
+        ui.status("warning", "Invalid choice; using 50 posts.")
+        mode_config = {"mode": "count", "count": 50}
+
+    ui.section("Export", 5)
+    ui.choice(1, "JSON", "recommended for data workflows")
+    ui.choice(2, "Markdown (.md)")
+    ui.choice(3, "Word (.docx)")
+    ui.choice(4, "CSV (.csv)")
+    format_choice = input("Select (1/2/3/4): ").strip()
+    output_format, extension = {
+        "2": ("md", ".md"),
+        "3": ("docx", ".docx"),
+        "4": ("csv", ".csv"),
+    }.get(format_choice, ("json", ".json"))
+    default_filename = f"{target_username}_tweets_{datetime.now().strftime('%Y%m%d_%H%M%S')}{extension}"
+    output_file = input(f"Filename (blank for {default_filename}): ").strip() or default_filename
+
+    return {
+        "x_username": x_username,
+        "x_password": x_password,
+        "target_username": target_username,
+        "mode_config": mode_config,
+        "output_file": output_file,
+        "output_format": output_format,
+        "manual_login": manual_login,
+        "scrape_type": scrape_type,
+        "browser_profile": browser_profile,
+        "prepare_browser_profile": prepare_browser_profile,
+    }
+
+
+def _legacy_get_scrape_config():
     """Sadece scrape edilecek hesap ve mod bilgilerini al (login hariç)"""
     print()
 
@@ -322,7 +410,7 @@ def get_scrape_config():
     }
 
 
-def ask_continue():
+def _legacy_ask_continue():
     """Kullanıcıya devam etmek isteyip istemediğini sor"""
     print()
     print("=" * 60)
@@ -334,6 +422,76 @@ def ask_continue():
             return False
         else:
             print("Lütfen 'E' (Evet) veya 'H' (Hayır) girin.")
+
+
+def get_scrape_config():
+    """Collect the next scrape configuration without asking for credentials."""
+    ui = TerminalUI()
+    ui.section("Source", 1)
+    ui.choice(1, "Profile posts", "archive posts from a public account")
+    ui.choice(2, "Bookmarks", "archive bookmarks from your own account")
+    scrape_type_choice = input("Select (1/2): ").strip()
+    if scrape_type_choice == "2":
+        scrape_type = "bookmarks"
+        target_username = "bookmarks"
+    else:
+        scrape_type = "profile"
+        ui.section("Target profile", 2)
+        target_username = input("Handle (without @): ").strip().lstrip("@")
+
+    ui.section("Collection range", 3)
+    ui.choice(1, "Post count")
+    ui.choice(2, "Last N days")
+    ui.choice(3, "Date range")
+    mode = input("Select (1/2/3): ").strip()
+    if mode == "1":
+        mode_config = {"mode": "count", "count": int(input("Posts to collect: ").strip())}
+    elif mode == "2":
+        mode_config = {"mode": "days", "days": int(input("Days to collect: ").strip())}
+    elif mode == "3":
+        print("Date format: DD.MM.YYYY (for example 01.01.2024)")
+        start_date = datetime.strptime(input("Start date: ").strip(), "%d.%m.%Y")
+        end_date = datetime.strptime(input("End date: ").strip(), "%d.%m.%Y")
+        mode_config = {
+            "mode": "date_range",
+            "start": start_date,
+            "end": end_date.replace(hour=23, minute=59, second=59),
+        }
+    else:
+        ui.status("warning", "Invalid choice; using 50 posts.")
+        mode_config = {"mode": "count", "count": 50}
+
+    ui.section("Export", 4)
+    ui.choice(1, "JSON", "recommended for data workflows")
+    ui.choice(2, "Markdown (.md)")
+    ui.choice(3, "Word (.docx)")
+    ui.choice(4, "CSV (.csv)")
+    format_choice = input("Select (1/2/3/4): ").strip()
+    output_format, extension = {
+        "2": ("md", ".md"),
+        "3": ("docx", ".docx"),
+        "4": ("csv", ".csv"),
+    }.get(format_choice, ("json", ".json"))
+    default_filename = f"{target_username}_tweets_{datetime.now().strftime('%Y%m%d_%H%M%S')}{extension}"
+    output_file = input(f"Filename (blank for {default_filename}): ").strip() or default_filename
+    return {
+        "target_username": target_username,
+        "mode_config": mode_config,
+        "output_file": output_file,
+        "output_format": output_format,
+        "scrape_type": scrape_type,
+    }
+
+
+def ask_continue():
+    """Ask whether to run another archive with the current authenticated session."""
+    while True:
+        answer = input("Archive another account? (Y/N): ").strip().lower()
+        if answer in {"y", "yes"}:
+            return True
+        if answer in {"n", "no"}:
+            return False
+        print("Please enter Y for yes or N for no.")
 
 
 def run_interactive():
@@ -354,12 +512,28 @@ def run_interactive():
         )
 
         print("=" * 60)
-        print("Scraping başlıyor...")
+        print("Starting archive...")
         print("=" * 60)
         print()
 
         # Scraper'ı başlat
-        scraper = XScraper(headless=False, run_log=run_log)  # Browser görünür olsun
+        if config["prepare_browser_profile"]:
+            if open_chrome_for_x_login(config["browser_profile"]) != 0:
+                record_event(
+                    run_log,
+                    "manual_login",
+                    "error",
+                    "Normal Chrome session setup failed",
+                    reason="normal_chrome_login_failed",
+                )
+                save_cli_run_log(run_log, "failed")
+                return 1
+
+        scraper = XScraper(
+            headless=False,
+            run_log=run_log,
+            browser_profile=config["browser_profile"],
+        )
 
         scraper.start()
 
@@ -374,7 +548,7 @@ def run_interactive():
                     reason="manual_login_timeout",
                 )
                 save_cli_run_log(run_log, "failed")
-                print("Giriş başarısız! Program sonlandırılıyor.")
+                print("Sign-in failed. Exiting.")
                 return 1
         else:
             if not scraper.login(config["x_username"], config["x_password"]):
@@ -386,7 +560,7 @@ def run_interactive():
                     reason="login_failed",
                 )
                 save_cli_run_log(run_log, "failed")
-                print("Giriş başarısız! Program sonlandırılıyor.")
+                print("Sign-in failed. Exiting.")
                 return 1
 
         # Ana scraping döngüsü
@@ -409,7 +583,7 @@ def run_interactive():
             if scrape_type == "bookmarks":
                 # Bookmarks sayfasına git
                 if not scraper.navigate_to_bookmarks():
-                    print("Bookmarks sayfasına gidilemedi!")
+                    print("Bookmarks page could not be opened.")
                     save_cli_run_log(run_log, "failed")
                     if ask_continue():
                         config.update(get_scrape_config())
@@ -432,7 +606,7 @@ def run_interactive():
             else:
                 # Profile git
                 if not scraper.navigate_to_profile(config["target_username"]):
-                    print("Profile gidilemedi!")
+                    print("Profile page could not be opened.")
                     save_cli_run_log(run_log, "failed")
                     if ask_continue():
                         config.update(get_scrape_config())
@@ -452,7 +626,7 @@ def run_interactive():
                     tweets = scraper.scrape_by_date(mode["start"], mode["end"])
 
             if not tweets:
-                print("Hiç tweet toplanamadı!")
+                print("No posts were collected.")
                 record_event(
                     run_log,
                     "timeline_loading",
@@ -470,7 +644,7 @@ def run_interactive():
                 output_format = config.get("output_format", "json")
 
                 if output_format == "json":
-                    print("JSON dosyası oluşturuluyor...")
+                    print("Writing JSON export...")
                     output_path = create_json_document(
                         tweets,
                         config["output_file"],
@@ -478,17 +652,17 @@ def run_interactive():
                         scrape_type=scrape_type,
                     )
                 elif output_format == "md":
-                    print("Markdown dosyası oluşturuluyor...")
+                    print("Writing Markdown export...")
                     output_path = create_markdown_document(
                         tweets, config["output_file"], config["target_username"]
                     )
                 elif output_format == "csv":
-                    print("CSV dosyası oluşturuluyor...")
+                    print("Writing CSV export...")
                     output_path = create_csv_document(
                         tweets, config["output_file"], config["target_username"]
                     )
                 else:
-                    print("Word document oluşturuluyor...")
+                    print("Writing Word export...")
                     output_path = create_word_document(
                         tweets, config["output_file"], config["target_username"]
                     )
@@ -500,9 +674,9 @@ def run_interactive():
                     and len(tweets) < mode.get("count", len(tweets))
                 )
                 if partial_count:
-                    print("KISMİ TAMAMLANDI!")
-                    print(f"İstenen: {mode['count']} tweet, toplanan: {len(tweets)} tweet.")
-                    print("Timeline daha fazla yeni tweet yüklemedi; run log detaylarına bakın.")
+                    print("PARTIALLY COMPLETED")
+                    print(f"Requested: {mode['count']} posts; collected: {len(tweets)} posts.")
+                    print("The timeline did not load more posts; see the run log for details.")
                     record_event(
                         run_log,
                         "timeline_loading",
@@ -512,9 +686,9 @@ def run_interactive():
                         target=mode["count"],
                     )
                 else:
-                    print("TAMAMLANDI!")
-                print(f"Toplam {len(tweets)} tweet toplandı.")
-                print(f"Dosya: {output_path}")
+                    print("COMPLETED")
+                print(f"Collected {len(tweets)} posts.")
+                print(f"File: {output_path}")
                 print("=" * 60)
                 record_event(
                     run_log,
@@ -532,14 +706,14 @@ def run_interactive():
                 config.update(get_scrape_config())
                 run_log = None
             else:
-                print("\nProgram sonlandırılıyor...")
+                print("\nExiting.")
                 break
 
         return 0
 
     except KeyboardInterrupt:
         print("\n\n" + "=" * 60)
-        print("İPTAL EDİLDİ - Ctrl+C algılandı")
+        print("CANCELLED - Ctrl+C detected")
         print("=" * 60)
 
         # ÖNCELİKLE tweetleri al (browser kapatılmadan önce)
@@ -557,7 +731,7 @@ def run_interactive():
         # Toplanan tweetleri kaydet
         if tweets and config:
             try:
-                print(f"\n{len(tweets)} tweet toplandı, kaydediliyor...")
+                print(f"\nSaving {len(tweets)} collected posts...")
                 tweets.sort(key=lambda t: t.date if t.date else datetime.min, reverse=True)
 
                 # Dosya adını güncelle
@@ -582,7 +756,7 @@ def run_interactive():
                     output_file = f"{base_name}_PARTIAL.docx"
                     output_path = create_word_document(tweets, output_file, config["target_username"])
 
-                print(f"\nKısmi sonuçlar kaydedildi: {output_path}")
+                print(f"\nPartial results saved: {output_path}")
                 if run_log:
                     record_event(
                         run_log,
@@ -594,7 +768,7 @@ def run_interactive():
                     )
                     save_cli_run_log(run_log, "cancelled")
             except Exception as save_err:
-                print(f"\nKaydetme hatası: {save_err}")
+                print(f"\nSave error: {save_err}")
                 if run_log:
                     record_event(
                         run_log,
@@ -605,14 +779,14 @@ def run_interactive():
                     )
                     save_cli_run_log(run_log, "failed")
         else:
-            print("\nKaydedilecek tweet bulunamadı.")
+            print("\nNo collected posts to save.")
             if run_log:
                 save_cli_run_log(run_log, "cancelled")
 
         return 1
 
     except Exception as e:
-        print(f"\nHata oluştu: {e}")
+        print(f"\nError: {e}")
         import traceback
         traceback.print_exc()
 
@@ -628,7 +802,7 @@ def run_interactive():
 
         # Hata durumunda da kaydetmeyi dene
         if tweets and config:
-            print(f"\nHataya rağmen {len(tweets)} tweet kaydediliyor...")
+            print(f"\nSaving {len(tweets)} collected posts despite the error...")
             output_format = config.get("output_format", "json")
             base_name = config["output_file"].rsplit(".", 1)[0]
             try:
@@ -649,7 +823,7 @@ def run_interactive():
                 else:
                     output_file = f"{base_name}_ERROR.docx"
                     output_path = create_word_document(tweets, output_file, config["target_username"])
-                print(f"Kaydedildi: {output_path}")
+                print(f"Saved: {output_path}")
                 if run_log:
                     record_event(
                         run_log,
