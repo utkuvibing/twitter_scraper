@@ -34,8 +34,8 @@ class ChromeAuthTests(unittest.TestCase):
             found = find_chrome_executable()
 
         self.assertEqual(
-            found,
-            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            found.replace("\\", "/"),
+            "C:/Program Files/Google/Chrome/Application/chrome.exe",
         )
 
     def test_macos_discovery_checks_the_standard_application_bundle(self):

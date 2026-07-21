@@ -222,10 +222,11 @@ class CliRequestTests(unittest.TestCase):
                     patch("sys.stdout", new_callable=io.StringIO) as stdout,
                 ):
                     self.assertEqual(run_cli(["paths"]), 0)
+                    expected_output = str((Path(temporary_directory) / "output").resolve())
             finally:
                 os.chdir(previous)
 
-        self.assertIn(str(Path(temporary_directory) / "output"), stdout.getvalue())
+        self.assertIn(expected_output, stdout.getvalue())
 
     def test_rejects_extreme_collection_limits_before_browser_start(self):
         with self.assertRaisesRegex(CliValidationError, "maximum"):

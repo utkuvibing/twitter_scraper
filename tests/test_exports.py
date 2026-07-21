@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import List
 
 from document_generator import (
@@ -75,7 +76,8 @@ class ExportSchemaTests(unittest.TestCase):
             previous = os.getcwd()
             try:
                 os.chdir(tmp)
-                self.assertEqual(default_output_dir(), os.path.join(tmp, "output"))
+                expected = str((Path(tmp) / "output").resolve())
+                self.assertEqual(default_output_dir(), expected)
             finally:
                 os.chdir(previous)
 
